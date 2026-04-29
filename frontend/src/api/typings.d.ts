@@ -41,6 +41,12 @@ declare namespace API {
     message?: string
   }
 
+  type BaseResponseQaSession = {
+    code?: number
+    data?: QaSession
+    message?: string
+  }
+
   type BaseResponseUserVO = {
     code?: number
     data?: UserVO
@@ -49,6 +55,11 @@ declare namespace API {
 
   type checkMd5Params = {
     md5: string
+  }
+
+  type CreateSessionRequest = {
+    sessionName?: string
+    summary?: string
   }
 
   type deleteSessionParams = {
@@ -142,6 +153,15 @@ declare namespace API {
 
   type updateParams = {
     id: number
+  }
+
+  type updateSessionParams = {
+    sessionId: number
+  }
+
+  type UpdateSessionRequest = {
+    sessionName?: string
+    summary?: string
   }
 
   type UserLoginRequest = {

@@ -3,6 +3,10 @@ spring:
     name: MokaDoc
   profiles:
     active: local
+  # 排除 LangChain4j 的 AI Service 自动配置（项目通过 AiServiceFactory 手动管理）
+  autoconfigure:
+    exclude:
+      - dev.langchain4j.spring.LangChain4jAutoConfig
   # ? ???? Session
   session:
     redis:
@@ -66,3 +70,27 @@ langchain4j:
     redis:
       host: localhost
       port: 6379
+
+# Elasticsearch 向量存储配置
+elasticsearch:
+  host: localhost
+  port: 9200
+  scheme: http
+  index-name: rag_documents
+
+# RAG 进阶优化配置
+rag:
+  query-transformation:
+    enabled: true
+    type: compress          # compress | expand
+  routing:
+    enabled: true
+  reranking:
+    enabled: true
+    model: rrf              # rrf（内置免费）
+    top-k: 5
+  injection:
+    template: standard      # standard | concise | analytical
+  es:
+    max-results: 10
+    min-score: 0.75

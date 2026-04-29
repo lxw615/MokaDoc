@@ -1,6 +1,8 @@
 package com.kanade.backend.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+
+import com.kanade.backend.ai.rag.DocumentRagService;
 import com.kanade.backend.dto.document.DocumentUpdateRequest;
 import com.kanade.backend.dto.document.DocumentVO;
 import com.kanade.backend.entity.Document;
@@ -10,6 +12,7 @@ import com.kanade.backend.mapper.DocumentMapper;
 import com.kanade.backend.service.DocumentService;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -36,6 +39,9 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
 
     @Value("${file.upload.dir:./uploads/documents}")
     private String uploadDir;
+
+    @Resource
+    private DocumentRagService documentRagService;
 
     @Override
     public Document getByMd5(Long userId, String md5) {
@@ -219,8 +225,9 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
         doc.setDeleteFlag(1);
         doc.setUpdateTime(LocalDateTime.now());
         boolean result = this.updateById(doc);
-        
+
         if (result) {
+            documentRagService.removeDocumentEmbeddings(id);
             log.info("✅ [文档删除] 删除成功 - docId={}, name={}", id, doc.getName());
         } else {
             log.error("❌ [文档删除] 删除失败 - docId={}", id);

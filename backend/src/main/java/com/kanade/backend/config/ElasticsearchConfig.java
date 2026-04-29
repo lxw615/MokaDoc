@@ -1,0 +1,48 @@
+package com.kanade.backend.config;
+
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.json.jackson.JacksonJsonpMapper;
+import co.elastic.clients.transport.rest_client.RestClientTransport;
+import dev.langchain4j.store.embedding.elasticsearch.ElasticsearchConfigurationKnn;
+import dev.langchain4j.store.embedding.elasticsearch.ElasticsearchEmbeddingStore;
+import org.apache.http.HttpHost;
+import org.elasticsearch.client.RestClient;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class ElasticsearchConfig {
+
+    @Value("${elasticsearch.host:localhost}")
+    private String host;
+
+    @Value("${elasticsearch.port:9200}")
+    private int port;
+
+    @Value("${elasticsearch.scheme:http}")
+    private String scheme;
+
+    @Value("${elasticsearch.index-name:rag_documents}")
+    private String indexName;
+
+    @Bean
+    public ElasticsearchClient elasticsearchClient() {
+        RestClient restClient = RestClient.builder(
+                new HttpHost(host, port, scheme)
+        ).build();
+        RestClientTransport transport = new RestClientTransport(
+                restClient, new JacksonJsonpMapper()
+        );
+        return new ElasticsearchClient(transport);
+    }
+
+    @Bean
+    public ElasticsearchEmbeddingStore elasticsearchEmbeddingStore(ElasticsearchClient client) {
+        return ElasticsearchEmbeddingStore.builder()
+                .client(client)
+                .indexName(indexName)
+                .configuration(ElasticsearchConfigurationKnn.builder().build())
+                .build();
+    }
+}

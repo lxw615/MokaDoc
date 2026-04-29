@@ -199,38 +199,45 @@ const changePassword = () => {
 </script>
 
 <style scoped>
-/* 样式已从全局 style.css 引入 */
-
 .log-list {
   margin-top: 20px;
 }
 
 .log-item {
-  padding: 12px;
-  border-bottom: 1px solid #e4e7ed;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #E6E3DC);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 6px;
+  margin-bottom: 2px;
 }
 
 .log-item:last-child {
   border-bottom: none;
 }
 
+.log-item:hover {
+  background-color: rgba(76, 91, 168, 0.03);
+}
+
 .log-time {
   font-size: 12px;
-  color: #909399;
+  color: #A8A8B4;
   min-width: 150px;
+  font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
 }
 
 .log-action {
   flex: 1;
   margin: 0 20px;
+  color: #2C2C3A;
 }
 
 .log-ip {
   font-size: 12px;
-  color: #909399;
+  color: #A8A8B4;
 }
 
 .storage-info {
@@ -239,27 +246,56 @@ const changePassword = () => {
 
 .storage-bar {
   height: 20px;
-  background-color: #f5f7fa;
+  background-color: #F3F0EB;
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 12px;
+  box-shadow: inset 0 1px 3px rgba(44, 44, 58, 0.06);
 }
 
 .storage-used {
   height: 100%;
-  background: linear-gradient(90deg, #409EFF, #66b1ff);
-  transition: width 0.3s;
+  background: linear-gradient(90deg, #4C5BA8, #7B88D1);
+  border-radius: 10px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  animation: storagePulse 2.5s ease-in-out infinite;
+  position: relative;
+}
+
+.storage-used::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.25) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes storagePulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.85; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
 .storage-text {
   font-size: 14px;
-  color: #606266;
+  color: #2C2C3A;
   margin-bottom: 16px;
 }
 
 .storage-detail {
   font-size: 14px;
-  color: #909399;
+  color: #7A7A8A;
 }
 
 .storage-detail p {

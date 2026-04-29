@@ -4,13 +4,13 @@
       <!-- 左侧：会话管理和文档选择 -->
       <div class="qa-left">
         <div class="session-management">
-          <button class="btn-sm btn-primary" @click="createNewSession">+ 新建会话</button>
+          <button class="btn-sm btn-primary" @click="openCreateDialog">+ 新建会话</button>
           <div class="session-list" ref="sessionListRef" @scroll="handleSessionListScroll">
             <div v-if="sessions.length === 0 && !loadingSessions" class="empty-session">
               暂无会话，请新建或等待加载
             </div>
             <div
-              v-for="session in visibleSessions"
+              v-for="session in sessions"
               :key="session.id"
               class="session-item"
               :class="{ active: currentSessionId === session.id }"
@@ -20,15 +20,10 @@
               <div class="session-summary">
                 {{ session.messages.length > 0 ? session.messages[0].content : '无消息' }}
               </div>
-            </div>
-
-            <!-- 展开更多会话 -->
-            <div
-              v-if="sessions.length > maxVisible"
-              class="session-expand"
-              @click="expanded = !expanded"
-            >
-              {{ expanded ? '收起' : `展开更多 (${sessions.length - maxVisible})` }}
+              <div class="session-actions" @click.stop>
+                <button class="session-action-btn" title="编辑" @click="openEditDialog(session)">✎</button>
+                <button class="session-action-btn session-action-delete" title="删除" @click="handleDeleteSession(session)">✕</button>
+              </div>
             </div>
 
             <!-- 加载更多提示 -->
@@ -41,7 +36,33 @@
             </div>
           </div>
         </div>
-        
+
+        <!-- 会话创建/编辑弹窗 -->
+        <div v-if="dialogVisible" class="dialog-overlay" @click.self="dialogVisible = false">
+          <div class="dialog-panel">
+            <div class="dialog-header">
+              <h3>{{ dialogMode === 'create' ? '新建会话' : '编辑会话' }}</h3>
+              <button class="dialog-close" @click="dialogVisible = false">✕</button>
+            </div>
+            <div class="dialog-body">
+              <label class="dialog-label">会话名称</label>
+              <input
+                ref="dialogInputRef"
+                v-model="sessionFormName"
+                class="dialog-input"
+                placeholder="输入会话名称（留空则自动生成）"
+                @keyup.enter="handleDialogSubmit"
+              >
+            </div>
+            <div class="dialog-footer">
+              <button class="btn" @click="dialogVisible = false">取消</button>
+              <button class="btn btn-primary" :disabled="saving" @click="handleDialogSubmit">
+                {{ saving ? '保存中...' : '确定' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="qa-left-header">
           <button class="btn-sm" @click="selectAllDocuments">全选</button>
           <button class="btn-sm" @click="deselectAllDocuments">取消全选</button>
@@ -151,8 +172,9 @@
 import { ref, computed, nextTick, onUnmounted, onMounted } from 'vue'
 import { useSSEFetch, createAbortController } from '@/utils/sse'
 import { marked } from 'marked'
-import { listSessions, listChat } from '@/api/liaotianguanli'
+import { listSessions, listChat, createSession, updateSession, deleteSession } from '@/api/liaotianguanli'
 import { list as listDocuments } from '@/api/wendangguanli'
+import { message, Modal } from 'ant-design-vue'
 
 // 配置 marked 选项
 marked.setOptions({
@@ -390,31 +412,108 @@ const handleSessionListScroll = (event: Event) => {
   }
 }
 
-// 创建新会话
-const createNewSession = async () => {
+// --- 会话 CRUD 弹窗 ---
+const dialogVisible = ref(false)
+const dialogMode = ref<'create' | 'edit'>('create')
+const editingSession = ref<Session | null>(null)
+const sessionFormName = ref('')
+const saving = ref(false)
+const dialogInputRef = ref<HTMLInputElement | null>(null)
+
+const openCreateDialog = () => {
+  dialogMode.value = 'create'
+  editingSession.value = null
+  sessionFormName.value = ''
+  dialogVisible.value = true
+  nextTick(() => dialogInputRef.value?.focus())
+}
+
+const openEditDialog = (session: Session) => {
+  dialogMode.value = 'edit'
+  editingSession.value = session
+  sessionFormName.value = session.name
+  dialogVisible.value = true
+  nextTick(() => dialogInputRef.value?.focus())
+}
+
+const handleDialogSubmit = async () => {
+  if (saving.value) return
+  saving.value = true
+
   try {
-    console.log('创建新会话...')
-    
-    // TODO: 调用后端创建会话接口
-    // 目前后端可能没有单独的创建接口，通过第一次发送消息自动创建
-    // 这里先使用前端临时创建，第一次发送消息时会由后端分配 sessionId
-    
-    const newId = Date.now() // 使用时间戳作为临时 ID
-    const newSession: Session = {
-      id: newId,
-      name: `新会话`,
-      messages: [],
-      backendSessionId: undefined, // 第一次发送消息时由后端分配
-      loaded: true  // 新会话无需加载历史
+    if (dialogMode.value === 'create') {
+      const res = await createSession({ sessionName: sessionFormName.value || undefined })
+      if (res.data.code === 0 && res.data.data) {
+        const qa = res.data.data
+        const newSession: Session = {
+          id: qa.id!,
+          name: qa.sessionName || `会话 ${qa.id}`,
+          messages: [],
+          backendSessionId: qa.id,
+          loaded: true,
+        }
+        sessions.value.unshift(newSession)
+        currentSessionId.value = newSession.id
+        message.success('会话创建成功')
+        dialogVisible.value = false
+      } else {
+        message.error(res.data.message || '创建失败')
+      }
+    } else {
+      const s = editingSession.value
+      if (!s) return
+      const res = await updateSession(
+        { sessionId: s.id },
+        { sessionName: sessionFormName.value || undefined },
+      )
+      if (res.data.code === 0 && res.data.data) {
+        s.name = sessionFormName.value || s.name
+        message.success('会话已更新')
+        dialogVisible.value = false
+      } else {
+        message.error(res.data.message || '更新失败')
+      }
     }
-    
-    sessions.value.unshift(newSession)  // 添加到列表开头
-    currentSessionId.value = newId
-    
-    console.log('✅ 新会话创建成功:', newSession)
-  } catch (error) {
-    console.error('❌ 创建会话失败:', error)
+  } catch {
+    message.error('网络错误，请稍后重试')
+  } finally {
+    saving.value = false
   }
+}
+
+const handleDeleteSession = (session: Session) => {
+  Modal.confirm({
+    title: '删除会话',
+    content: `确定要删除「${session.name}」吗？该操作不可撤销。`,
+    okText: '删除',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        const res = await deleteSession({ sessionId: session.id })
+        if (res.data.code === 0) {
+          // 从列表中移除
+          const idx = sessions.value.findIndex(s => s.id === session.id)
+          if (idx !== -1) sessions.value.splice(idx, 1)
+
+          // 如果删除的是当前会话，切换到下一个
+          if (currentSessionId.value === session.id) {
+            if (sessions.value.length > 0) {
+              currentSessionId.value = sessions.value[0].id
+              loadSessionMessages(sessions.value[0].id)
+            } else {
+              currentSessionId.value = null
+            }
+          }
+          message.success('会话已删除')
+        } else {
+          message.error(res.data.message || '删除失败')
+        }
+      } catch {
+        message.error('网络错误，请稍后重试')
+      }
+    },
+  })
 }
 
 // 加载指定会话的消息历史
@@ -974,10 +1073,17 @@ const fixMarkdownHeaders = (text: string): string => {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  max-height: 340px;
 }
 
 .qa-left-header {
   flex-shrink: 0;
+}
+
+.document-select-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .qa-middle {
@@ -1014,5 +1120,146 @@ const fixMarkdownHeaders = (text: string): string => {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* --- 会话项操作按钮 --- */
+.session-item {
+  position: relative;
+}
+
+.session-actions {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.session-item:hover .session-actions {
+  opacity: 1;
+}
+
+.session-action-btn {
+  background: none;
+  border: none;
+  font-size: 14px;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #7A7A8A;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.session-action-btn:hover {
+  background-color: rgba(76, 91, 168, 0.08);
+  color: var(--primary-color, #4C5BA8);
+}
+
+.session-action-delete:hover {
+  background-color: rgba(196, 84, 92, 0.08);
+  color: #C4545C;
+}
+
+/* --- 弹窗 --- */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 44, 58, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.dialog-panel {
+  background: var(--surface-color, #FFFFFF);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(44, 44, 58, 0.18);
+  width: 420px;
+  max-width: 90vw;
+  animation: fadeInScale 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+
+.dialog-header h3 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-color, #2C2C3A);
+}
+
+.dialog-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #A8A8B4;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dialog-close:hover {
+  background-color: rgba(44, 44, 58, 0.06);
+  color: #2C2C3A;
+}
+
+.dialog-body {
+  padding: 20px 24px;
+}
+
+.dialog-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-color, #2C2C3A);
+  margin-bottom: 8px;
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border-color, #E6E3DC);
+  border-radius: 6px;
+  font-size: 14px;
+  outline: none;
+  background: var(--bg-warm, #F9F7F3);
+  transition: border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dialog-input:focus {
+  border-color: var(--primary-color, #4C5BA8);
+  box-shadow: 0 0 0 3px rgba(76, 91, 168, 0.18);
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 24px 20px;
 }
 </style>

@@ -138,15 +138,11 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
             // 保存/更新会话-文档关联
             saveSessionDocuments(sessionId, documentIds, session.getUserId());
 
-            // 构建 RAG 内容检索器
-            ContentRetriever contentRetriever = documentRagService.getContentRetriever(
-                    sessionId, documentIds, session.getUserId());
+            // 确保文档已索引到 ES（副作用：写入 ES）
+            documentRagService.getContentRetriever(sessionId, documentIds, session.getUserId());
 
-            aiService = contentRetriever != null
-                    ? aiServiceFactory.createRagChatAssistant(contentRetriever)
-                    : aiServiceFactory.getChatAssistant();
-            log.info("📄 [RAG模式] sessionId={}, documents={}, contentRetriever={}",
-                    sessionId, documentIds, contentRetriever != null ? "已启用" : "降级为普通对话");
+            aiService = aiServiceFactory.createAdvancedRagChatAssistant();
+            log.info("🚀 [进阶RAG模式] sessionId={}, documents={}", sessionId, documentIds);
         } else {
             aiService = aiServiceFactory.getChatAssistant();
         }

@@ -1,5 +1,6 @@
 package com.kanade.backend.ai;
 
+import com.kanade.backend.ai.rag.orchestrator.AdvancedRagOrchestrator;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
@@ -18,12 +19,15 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Component
 public class AiServiceFactory {
-    
+
     @Resource
     private OpenAiStreamingChatModel openAiStreamingChatModel;
-    
+
     @Resource
     private ChatMemoryProvider chatMemoryProvider;
+
+    @Resource
+    private AdvancedRagOrchestrator advancedRagOrchestrator;
     
     /**
      * 缓存已创建的AI服务实例，避免重复创建
@@ -113,6 +117,18 @@ public class AiServiceFactory {
                 .streamingChatModel(openAiStreamingChatModel)
                 .chatMemoryProvider(chatMemoryProvider)
                 .contentRetriever(contentRetriever)
+                .build();
+    }
+
+    /**
+     * 创建进阶 RAG 聊天助手（使用 DefaultRetrievalAugmentor 管道）
+     */
+    public AiChatService createAdvancedRagChatAssistant() {
+        log.info("🚀 [创建进阶RAG助手] 已配置 RetrievalAugmentor");
+        return AiServices.builder(AiChatService.class)
+                .streamingChatModel(openAiStreamingChatModel)
+                .chatMemoryProvider(chatMemoryProvider)
+                .retrievalAugmentor(advancedRagOrchestrator.getRetrievalAugmentor())
                 .build();
     }
 
