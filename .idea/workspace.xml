@@ -4,18 +4,22 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="43fb48f8-4fc4-4f1d-98ae-3b59aeecfc46" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/backend/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/backend/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/BackendApplication.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/BackendApplication.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/AiServiceFactory.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/AiServiceFactory.java" afterDir="false" />
+    <list default="true" id="43fb48f8-4fc4-4f1d-98ae-3b59aeecfc46" name="更改" comment="20260521——21：58work">
+      <change beforePath="$PROJECT_DIR$/.idea/compiler.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/compiler.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/sql/table.sql" beforeDir="false" afterPath="$PROJECT_DIR$/backend/sql/table.sql" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/rag/orchestrator/AdvancedRagOrchestrator.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/rag/orchestrator/AdvancedRagOrchestrator.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/rag/router/SmartQueryRouter.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/ai/rag/router/SmartQueryRouter.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/service/impl/QaSessionServiceImpl.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/service/impl/QaSessionServiceImpl.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/config/LangChain4jConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/config/LangChain4jConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/config/Neo4jConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/config/Neo4jConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/CypherTemplateEngine.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/CypherTemplateEngine.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphBuildOrchestrator.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphBuildOrchestrator.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphCrudService.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphCrudService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphEntityAligner.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphEntityAligner.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphExtractionService.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/GraphExtractionService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/Neo4jSessionFactory.java" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/java/com/kanade/backend/graph/Neo4jSessionFactory.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/src/main/resources/application.yml" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/resources/application.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/api/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/api/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/api/typings.d.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/api/typings.d.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/src/main/resources/schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/backend/src/main/resources/schema.sql" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/views/KnowledgeGraph.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/KnowledgeGraph.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -127,8 +131,17 @@
       <workItem from="1778027760012" duration="5496000" />
       <workItem from="1779356321288" duration="5243000" />
       <workItem from="1779361623042" duration="230000" />
-      <workItem from="1779361918800" duration="7256000" />
+      <workItem from="1779361918800" duration="18015000" />
     </task>
+    <task id="LOCAL-00001" summary="20260521——21：58work">
+      <option name="closed" value="true" />
+      <created>1779371926261</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1779371926261</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -144,5 +157,9 @@
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="20260521——21：58work" />
+    <option name="LAST_COMMIT_MESSAGE" value="20260521——21：58work" />
   </component>
 </project>

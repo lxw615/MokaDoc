@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.neo4j.driver.Driver;
 import org.neo4j.driver.Session;
 import org.neo4j.driver.SessionConfig;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.function.Consumer;
@@ -18,6 +19,7 @@ import java.util.function.Function;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "neo4j.enabled", havingValue = "true", matchIfMissing = false)
 public class Neo4jSessionFactory {
 
     private final Driver driver;

@@ -101,7 +101,7 @@ public class GraphEntityAligner {
             for (Map.Entry<String, GraphEntity> existing : fuzzyMap.entrySet()) {
                 String existingName = existing.getKey();
                 if (entity.getType().equals(existing.getValue().getType())
-                    && editDistance(nameKey, existingName) <= 2) {
+                    && nameKey.equals(existingName)) {
                     // 编辑距离 ≤ 2，且同类型——合并
                     GraphEntity exist = existing.getValue();
                     exist.setSourceDocIds(mergeDocIds(exist.getSourceDocIds(), entity.getSourceDocIds()));

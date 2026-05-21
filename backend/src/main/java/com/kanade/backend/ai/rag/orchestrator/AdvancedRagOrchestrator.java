@@ -186,10 +186,8 @@ public class AdvancedRagOrchestrator {
             log.info("🎯 [智能路由] 已禁用，使用默认路由（全部检索器）");
             return new DefaultQueryRouter(retrieverMap.values());
         }
-        log.info("🎯 [智能路由] 启用智能路由");
-        return new SmartQueryRouter(retrieverMap, queryTargetMap);
-        log.info("🎯 [智能路由] 启用智能路由（含 GRAPH/HYBRID 意图）");
-        return new SmartQueryRouter(chatModel, retrieverMap);
+        log.info("🎯 [智能路由] 启用智能路由（双模式：target查表 + LLM意图分析，含 GRAPH/HYBRID）");
+        return new SmartQueryRouter(chatModel, retrieverMap, queryTargetMap);
     }
 
     private ContentAggregator buildAggregator() {

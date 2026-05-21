@@ -66,6 +66,9 @@ public class GraphBuildOrchestrator {
     public void buildAsync(Long taskId, Long userId, List<Long> documentIds) {
         log.info("🚀 [构建开始] taskId={}, userId={}, docIds={}", taskId, userId, documentIds);
 
+        // 等待前端 SSE 订阅连接就绪
+        try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+
         try {
             updateTask(taskId, "PROCESSING", 0, null);
 

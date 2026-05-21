@@ -119,59 +119,14 @@ public class GraphExtractionService {
      */
     private String buildExtractionPrompt(String batchText) {
         return """
-            你是一个专业的知识图谱构建助手。请从以下文档内容中抽取关键实体和关系，
-            构建知识图谱的三元组。
+            从文档中抽取关键实体和关系。最多15个实体。只输出JSON，不要任何其他文字。
 
-            ## 抽取规则
-            1. **实体类型**：从以下类型中选择最合适的（可扩展）：
-               - Person（人物）
-               - Organization（组织/公司）
-               - Project（项目/产品）
-               - Concept（概念/术语）
-               - Location（地点）
-               - Event（事件）
-               - Technology（技术/工具）
+            实体类型:Person/Organization/Project/Concept/Location/Event/Technology
+            关系类型:INCLUDES/USES/RELATED_TO/CREATED/BELONGS_TO/LOCATED_IN
 
-            2. **关系类型**：描述实体间的语义关系，例如：
-               - WORKS_FOR（任职于）
-               - CREATED（创建了）
-               - BELONGS_TO（属于）
-               - RELATED_TO（相关）
-               - INCLUDES（包含）
-               - USES（使用）
-               - PARTICIPATED_IN（参与了）
-               - LOCATED_IN（位于）
+            {"entities":[{"entityId":"e1","name":"实体","type":"类型"}],"relations":[{"fromEntityId":"e1","toEntityId":"e2","type":"关系"}]}
 
-            3. **要求**：
-               - 每个实体必须有唯一的 entityId（格式：e+序号，如 e1、e2）
-               - 关系用 entityId 引用实体
-               - 实体名称尽量规范统一
-               - 忽略过于泛化的实体（如"研究"、"方法"等无具体指向的词）
-
-            ## 输出格式
-            严格按以下 JSON 格式输出（只输出 JSON，不要任何其他文字）：
-
-            ```json
-            {
-              "entities": [
-                {
-                  "entityId": "e1",
-                  "name": "实体名称",
-                  "type": "实体类型",
-                  "sourceDocId": "来源文档ID"
-                }
-              ],
-              "relations": [
-                {
-                  "fromEntityId": "e1",
-                  "toEntityId": "e2",
-                  "type": "关系类型"
-                }
-              ]
-            }
-            ```
-
-            ## 文档内容
+            文档:
             """ + batchText;
     }
 
@@ -231,8 +186,31 @@ public class GraphExtractionService {
 
             return ExtractionResult.success(entities, relations, 0);
         } catch (Exception e) {
-            log.error("❌ [JSON解析失败] error={}, rawResponse={}", e.getMessage(),
-                response.substring(0, Math.min(200, response.length())));
+            // JSON 截断修复：尝试补全残缺 JSON
+            log.warn("⚠️ [JSON解析失败] 尝试修复截断: {}", e.getMessage());
+            String repaired = repairTruncatedJson(extractJson(response));
+            if (repaired != null) {
+                try {
+                    Type type2 = new TypeToken<LllmResponse>() {}.getType();
+                    LllmResponse llmResponse2 = gson.fromJson(repaired, type2);
+                    if (llmResponse2 != null && llmResponse2.entities != null
+                        && !llmResponse2.entities.isEmpty()) {
+                        List<GraphEntity> entities2 = llmResponse2.entities.stream()
+                            .map(en -> GraphEntity.builder()
+                                .entityId(en.entityId)
+                                .name(en.name)
+                                .type(en.type != null ? en.type : "Concept")
+                                .userId(userId)
+                                .sourceDocIds(en.sourceDocId != null ? en.sourceDocId : "")
+                                .build())
+                            .collect(Collectors.toList());
+                        log.info("✅ [JSON修复成功] 修复后实体={}", entities2.size());
+                        return ExtractionResult.success(entities2, List.of(), 0);
+                    }
+                } catch (Exception ignored) {}
+            }
+            log.error("❌ [JSON解析失败] error={}, rawResponse前200={}",
+                e.getMessage(), response.substring(0, Math.min(200, response.length())));
             return ExtractionResult.failure("JSON 解析异常: " + e.getMessage(), 0);
         }
     }
@@ -271,6 +249,73 @@ public class GraphExtractionService {
         }
 
         return trimmed;
+    }
+
+    /**
+     * 修复截断的 JSON。
+     * 策略：自动补全未闭合的括号和引号，恢复尽可能多的数据。
+     */
+    private String repairTruncatedJson(String json) {
+        if (json == null || json.isEmpty()) return null;
+
+        // 1. 移除末尾不完整的片段（最后一个完整结构之后的部分）
+        int lastComplete = findLastCompletePos(json);
+        if (lastComplete <= 0) return null;
+
+        String trunk = json.substring(0, lastComplete + 1);
+
+        // 2. 统计并闭合未闭合的括号
+        int braceDepth = 0, bracketDepth = 0;
+        boolean inString = false;
+        for (int i = 0; i < trunk.length(); i++) {
+            char c = trunk.charAt(i);
+            if (c == '"' && (i == 0 || trunk.charAt(i - 1) != '\\')) inString = !inString;
+            if (inString) continue;
+            if (c == '{') braceDepth++;
+            if (c == '}') braceDepth--;
+            if (c == '[') bracketDepth++;
+            if (c == ']') bracketDepth--;
+        }
+
+        // 3. 补全括号
+        StringBuilder sb = new StringBuilder(trunk);
+        // 如果在字符串中，先闭合引号
+        if (inString) sb.append('"');
+        // 闭合数组（relations 和 entities）
+        while (bracketDepth > 0) { sb.append(']'); bracketDepth--; }
+        // 闭合对象
+        while (braceDepth > 0) { sb.append('}'); braceDepth--; }
+
+        String repaired = sb.toString();
+        // 验证是否是有效 JSON
+        try {
+            new com.google.gson.JsonParser().parse(repaired);
+            return repaired;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 找到 JSON 中最后一个完整的结构位置。
+     * 从后往前找最后一个完整的 } 或 ]（不在字符串中）。
+     */
+    private int findLastCompletePos(String json) {
+        // 找最后一个 entities 数组中的完整对象
+        int lastBrace = -1;
+        int depth = 0;
+        boolean inString = false;
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '"' && (i == 0 || json.charAt(i - 1) != '\\')) inString = !inString;
+            if (inString) continue;
+            if (c == '{' || c == '[') depth++;
+            if (c == '}' || c == ']') {
+                depth--;
+                if (depth <= 2) lastBrace = i; // depth=2 是 entities 数组内的对象
+            }
+        }
+        return lastBrace;
     }
 
     // ==================== LLM JSON 结构映射 ====================

@@ -5,23 +5,22 @@
       <div class="graph-left">
         <div class="graph-left-header">
           <h3>文档选择</h3>
-          <a-select
-            v-model:value="selectedDocumentId"
-            class="form-control"
-            placeholder="全部文档"
-            allow-clear
-            style="width: 100%"
-            @change="handleDocFilterChange"
+        </div>
+
+        <!-- 文档列表（可见 checkbox 列表） -->
+        <div class="document-select-list">
+          <div v-if="loadingDocuments" class="loading-documents">加载中...</div>
+          <div v-else-if="documents.length === 0" class="loading-documents">暂无文档</div>
+          <div
+            v-for="doc in documents"
+            :key="doc.id"
+            class="document-select-item"
+            :class="{ active: selectedDocs.includes(doc.id) }"
+            @click="toggleDocumentSelection(doc.id)"
           >
-            <a-select-option value="">全部文档</a-select-option>
-            <a-select-option
-              v-for="doc in documents"
-              :key="doc.id"
-              :value="doc.id"
-            >
-              {{ doc.name }}
-            </a-select-option>
-          </a-select>
+            <a-checkbox :checked="selectedDocs.includes(doc.id)" @click.stop />
+            <span class="doc-item-name">{{ doc.name }}</span>
+          </div>
         </div>
 
         <!-- 构建操作区 -->
@@ -265,7 +264,8 @@ interface SearchResult extends GraphEntity {
 
 // ==================== 响应式状态 ====================
 const documents = ref<Document[]>([])
-const selectedDocumentId = ref<string | number>('')
+const loadingDocuments = ref(false)
+const selectedDocs = ref<number[]>([])
 const searchQuery = ref('')
 const searchResults = ref<SearchResult[]>([])
 const graphReady = ref(false)
@@ -316,16 +316,23 @@ const statusLabel = computed(() => {
 })
 
 // ==================== 生命周期 ====================
-onMounted(() => {
+onMounted(async () => {
   fetchDocuments()
   initNetwork()
   refreshTasks()
+  // 等 vis-network 就绪后再加载图谱
+  await nextTick()
+  loadExistingGraph()
 })
 
 onUnmounted(() => {
   if (buildAbortController) {
     buildAbortController.abort()
     buildAbortController = null
+  }
+  if (pollingTimer) {
+    clearInterval(pollingTimer)
+    pollingTimer = null
   }
   if (networkInstance) {
     networkInstance.destroy()
@@ -343,20 +350,19 @@ onUnmounted(() => {
 
 // ==================== 文档加载 ====================
 async function fetchDocuments() {
+  loadingDocuments.value = true
   try {
     const res = await listDocuments()
-    console.log('📂 [图谱-文档列表] response:', res.data)
     if (res.data.code === 0 && res.data.data) {
       documents.value = res.data.data.map((doc: any) => ({
         id: doc.id!,
         name: doc.name || '',
       }))
-      console.log('📂 [图谱-文档列表] 加载成功:', documents.value.length, '篇')
-    } else {
-      console.warn('📂 [图谱-文档列表] code不为0:', res.data)
     }
   } catch (e) {
     console.error('获取文档列表失败', e)
+  } finally {
+    loadingDocuments.value = false
   }
 }
 
@@ -465,8 +471,8 @@ async function triggerBuild() {
 
   try {
     // 调用后端构建 API
-    const docIds = selectedDocumentId.value
-      ? [Number(selectedDocumentId.value)]
+    const docIds = selectedDocs.value.length > 0
+      ? [...selectedDocs.value]
       : undefined
     const res = await apiTriggerBuild({ documentIds: docIds })
 
@@ -493,6 +499,7 @@ async function triggerBuild() {
 function subscribeBuildProgress(taskId: number) {
   buildAbortController = createAbortController()
 
+  // SSE 主通道
   useSSEFetch(
     getBuildProgressUrl(taskId),
     {},
@@ -525,12 +532,50 @@ function subscribeBuildProgress(taskId: number) {
         buildAbortController = null
       },
       onError: (error: any) => {
-        console.error('SSE progress error:', error)
-        buildLoading.value = false
-        buildAbortController = null
+        console.warn('SSE 连接失败，切换为轮询模式')
+        startPolling(taskId)
       },
     },
   )
+
+  // SSE 兜底：3 秒后还没收到消息，启动轮询
+  setTimeout(() => {
+    if (buildAbortController && buildTask.value?.status === 'PROCESSING') {
+      startPolling(taskId)
+    }
+  }, 3000)
+}
+
+let pollingTimer: ReturnType<typeof setInterval> | null = null
+
+function startPolling(taskId: number) {
+  if (pollingTimer) return
+  pollingTimer = setInterval(async () => {
+    try {
+      const { getTask } = await import('@/api/tupuguanli')
+      const res = await getTask(taskId)
+      if (res.data.code === 0 && res.data.data) {
+        const t = res.data.data
+        buildTask.value!.status = t.status || 'PROCESSING'
+        buildTask.value!.progress = t.progress || 0
+
+        if (t.status === 'COMPLETED') {
+          clearInterval(pollingTimer!)
+          pollingTimer = null
+          buildLoading.value = false
+          graphReady.value = true
+          loadGraphForCurrentDoc()
+          message.success('图谱构建完成！')
+        } else if (t.status === 'FAILED') {
+          clearInterval(pollingTimer!)
+          pollingTimer = null
+          buildLoading.value = false
+          buildTask.value!.errorMessage = t.errorMessage
+          message.error(t.errorMessage || '构建失败')
+        }
+      }
+    } catch { /* ignore */ }
+  }, 2000)
 }
 
 async function loadGraphForCurrentDoc() {
@@ -553,11 +598,20 @@ async function loadGraphForCurrentDoc() {
 }
 
 async function loadExistingGraph() {
-  // 尝试加载一个通用查询来获取初始展示数据
   try {
-    const res = await apiSearchEntities({ keyword: '', limit: 20 })
+    // 先用 stats 确认有数据，然后搜索实体渲染
+    const statsRes = await getGraphStats()
+    if (statsRes.data.code !== 0 || !statsRes.data.data || (statsRes.data.data.nodeCount || 0) === 0) {
+      loadMockGraphData()
+      return
+    }
+
+    // 搜索所有实体（keyword为空查全部）
+    const res = await apiSearchEntities({ keyword: '', limit: 50 })
     if (res.data.code === 0 && res.data.data && res.data.data.length > 0) {
-      const firstEntity = res.data.data[0]
+      const entities = res.data.data
+      // 选第一个有意义的实体名扩展子图
+      const firstEntity = entities.find((e: any) => (e.name || '').length >= 2) || entities[0]
       const subRes = await apiGetSubgraph({ entityName: firstEntity.name || '', hops: 1 })
       if (subRes.data.code === 0 && subRes.data.data) {
         renderSubgraph(subRes.data.data)
@@ -566,7 +620,7 @@ async function loadExistingGraph() {
       }
     }
   } catch {
-    // fallback to mock
+    console.error('加载图谱数据失败')
   }
   loadMockGraphData()
 }
@@ -732,11 +786,17 @@ function renderSubgraph(subgraph: { nodes: any[]; edges: any[] }) {
   })
 }
 
-// ==================== 辅助功能 ====================
-function handleDocFilterChange() {
-  // 文档筛选逻辑（后续实现）
+// ==================== 文档选择 ====================
+function toggleDocumentSelection(docId: number) {
+  const idx = selectedDocs.value.indexOf(docId)
+  if (idx > -1) {
+    selectedDocs.value.splice(idx, 1)
+  } else {
+    selectedDocs.value.push(docId)
+  }
 }
 
+// ==================== 辅助功能 ====================
 function entityTypeColor(type: string): string {
   const colors: Record<string, string> = {
     Concept: 'blue',
@@ -948,10 +1008,10 @@ function confirmDeleteStep3() {
 
   Modal.confirm({
     title: '⚠️⚠️⚠️ 最终确认',
-    content: '请输入 "DELETE" 以确认删除全部图谱数据：',
+    content: '这是最后一次确认。删除后所有图谱数据（实体、关系、构建记录）将被永久清除，不可恢复。',
     okText: '确认删除',
     cancelText: '取消',
-    okButtonProps: { danger: true, disabled: true },
+    okButtonProps: { danger: true },
     onOk: async () => {
       try {
         const res = await deleteGraph('DELETE')
@@ -970,20 +1030,6 @@ function confirmDeleteStep3() {
       }
     },
   })
-
-  // 检测输入框变化（Ant Design Vue Modal 不支持动态 disabled，这里简化处理）
-  setTimeout(() => {
-    const inputEl = document.querySelector('.ant-modal input') as HTMLInputElement
-    if (inputEl) {
-      inputEl.placeholder = '请输入 DELETE'
-      inputEl.addEventListener('input', () => {
-        const okBtn = document.querySelector('.ant-modal .ant-btn-dangerous') as HTMLButtonElement
-        if (okBtn) {
-          okBtn.disabled = inputEl.value !== 'DELETE'
-        }
-      })
-    }
-  }, 100)
 }
 </script>
 
@@ -1004,33 +1050,55 @@ function confirmDeleteStep3() {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: 16px 14px;
-  gap: 16px;
+  padding: 12px 14px;
+  gap: 10px;
+}
+
+.graph-left > * {
+  flex-shrink: 0;
 }
 
 .graph-left-header h3,
-.graph-legend h3 {
-  font-size: 14px;
+.graph-legend h3,
+.graph-tasks h3 {
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-color, #2C2C3A);
-  margin-bottom: 10px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .graph-left-actions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+}
+
+.graph-left-actions .ant-btn {
+  border-radius: var(--radius-sm, 6px);
+  transition: all var(--transition-fast, 0.18s) var(--transition-ease, ease);
+}
+
+.graph-left-actions .ant-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm, 0 2px 8px rgba(44,44,58,0.06));
+}
+
+.graph-left-actions .ant-btn:active {
+  transform: scale(0.97);
 }
 
 .build-progress {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .progress-label {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   font-size: 12px;
   color: var(--text-secondary, #7A7A8A);
 }
@@ -1042,13 +1110,60 @@ function confirmDeleteStep3() {
 }
 
 .graph-left-search {
-  margin-top: 4px;
+  margin-top: 0;
+}
+
+/* ==================== 文档选择列表 ==================== */
+.document-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color, #E6E3DC);
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px;
+  background: var(--bg-warm, #F9F7F3);
+}
+
+.loading-documents {
+  font-size: 12px;
+  color: var(--text-muted, #A8A8B4);
+  padding: 8px;
+  text-align: center;
+}
+
+.document-select-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.18s) var(--transition-ease, ease);
+  font-size: 13px;
+}
+
+.document-select-item:hover {
+  background: var(--surface-hover, #FAF9F6);
+}
+
+.document-select-item.active {
+  background: var(--primary-soft, rgba(76, 91, 168, 0.08));
+}
+
+.doc-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .search-results {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .search-result-item {
@@ -1068,8 +1183,7 @@ function confirmDeleteStep3() {
 
 /* ==================== 图例 ==================== */
 .graph-legend {
-  margin-top: auto;
-  padding-top: 12px;
+  padding-top: 8px;
   border-top: 1px solid var(--border-color, #E6E3DC);
 }
 
@@ -1104,6 +1218,21 @@ function confirmDeleteStep3() {
   padding: 10px 14px;
   background: var(--surface-color, #FFFFFF);
   border-bottom: 1px solid var(--border-color, #E6E3DC);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.graph-toolbar .ant-btn {
+  transition: all var(--transition-fast, 0.18s) var(--transition-ease, ease);
+}
+
+.graph-toolbar .ant-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm, 0 2px 8px rgba(44,44,58,0.06));
+}
+
+.graph-toolbar .ant-btn:active {
+  transform: scale(0.96);
 }
 
 .graph-visualization {
@@ -1223,35 +1352,41 @@ function confirmDeleteStep3() {
 
 .node-relations li:hover {
   background: var(--primary-soft, rgba(76, 91, 168, 0.08));
+  transform: translateX(2px);
+}
+
+/* 右侧按钮动效 */
+.graph-right .ant-btn {
+  transition: all var(--transition-fast, 0.18s) var(--transition-ease, ease);
+}
+
+.graph-right .ant-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm, 0 2px 8px rgba(44,44,58,0.06));
+}
+
+.graph-right .ant-btn:active {
+  transform: scale(0.97);
 }
 
 /* ==================== 构建历史 ==================== */
 .graph-tasks {
-  margin-top: auto;
-  padding-top: 12px;
+  padding-top: 6px;
   border-top: 1px solid var(--border-color, #E6E3DC);
-}
-
-.graph-tasks h3 {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-color, #2C2C3A);
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .task-empty {
   font-size: 12px;
   color: var(--text-muted, #A8A8B4);
-  padding: 8px 0;
+  padding: 4px 0;
 }
 
 .task-items {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .task-item {
@@ -1259,17 +1394,19 @@ function confirmDeleteStep3() {
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  padding: 3px 0;
 }
 
 .task-time {
   color: var(--text-secondary, #7A7A8A);
   white-space: nowrap;
+  font-size: 11px;
 }
 
 /* ==================== 删除按钮 ==================== */
 .graph-delete {
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px solid var(--border-color, #E6E3DC);
 }
 
