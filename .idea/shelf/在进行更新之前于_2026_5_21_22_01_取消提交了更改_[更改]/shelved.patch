@@ -1,0 +1,73 @@
+Index: backend/src/main/resources/application.yml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>spring:\r\n  application:\r\n    name: MokaDoc\r\n  profiles:\r\n    active: local\r\n  # 排除 LangChain4j 的 AI Service 自动配置（项目通过 AiServiceFactory 手动管理）\r\n  autoconfigure:\r\n    exclude:\r\n      - dev.langchain4j.spring.LangChain4jAutoConfig\r\n  # ? ???? Session\r\n  session:\r\n    redis:\r\n      # ??????JSON\r\n      serializer: json\r\n      flush-mode: on-save\r\n    # session 30 ???\r\n    timeout: 2592000\r\n  # MySQL ???????????\r\n  datasource:\r\n    driver-class-name: com.mysql.cj.jdbc.Driver\r\n    url: jdbc:mysql://localhost:3306/mokaDoc\r\n    username: root\r\n    password: 114514\r\n  # Redis ????????\r\n  data:\r\n    redis:\r\n      host: localhost\r\n      port: 6379\r\n      database: 4\r\n      password:\r\n      ttl: 3600\r\n  servlet:\r\n    multipart:\r\n      max-file-size: 50MB\r\n      max-request-size: 60MB\r\n\r\nmybatis-flex:\r\n  configuration:\r\n    map-underscore-to-camel-case: true\r\n\r\nserver:\r\n  port: 8080\r\n  servlet:\r\n    context-path: /api\r\n    session:\r\n      cookie:\r\n        max-age: 2592000\r\n\r\n\r\n# springdoc-openapi ??\r\nspringdoc:\r\n  swagger-ui:\r\n    path: /swagger-ui.html\r\n    tags-sorter: alpha\r\n    operations-sorter: alpha\r\n  api-docs:\r\n    path: /v3/api-docs\r\n  group-configs:\r\n    - group: 'default'\r\n      paths-to-match: '/**'\r\n      packages-to-scan: com.kanade.backend.controller\r\n\r\n# 文件上传配置\r\nfile:\r\n  upload:\r\n    dir: ./uploads/documents\r\n\r\nlangchain4j:\r\n  community:\r\n    redis:\r\n      host: localhost\r\n      port: 6379\r\n\r\n# Elasticsearch 向量存储配置\r\nelasticsearch:\r\n  host: localhost\r\n  port: 9200\r\n  scheme: http\r\n  index-name: rag_documents\r\n\r\n# RAG 进阶优化配置\r\nrag:\r\n  query-transformation:\r\n    enabled: true\r\n    type: compress          # compress | expand\r\n  routing:\r\n    enabled: true\r\n  reranking:\r\n    enabled: true\r\n    model: rrf              # rrf（内置免费）\r\n    top-k: 5\r\n  injection:\r\n    template: standard      # standard | concise | analytical\r\n  es:\r\n    max-results: 10\r\n    min-score: 0.75\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/backend/src/main/resources/application.yml b/backend/src/main/resources/application.yml
+--- a/backend/src/main/resources/application.yml	(revision b20ddc01d10592515dbaa216535f19b89670789a)
++++ b/backend/src/main/resources/application.yml	(date 1779370735031)
+@@ -3,6 +3,11 @@
+     name: MokaDoc
+   profiles:
+     active: local
++  # 自动执行 resources/schema.sql 建表
++  sql:
++    init:
++      mode: always
++      continue-on-error: true
+   # 排除 LangChain4j 的 AI Service 自动配置（项目通过 AiServiceFactory 手动管理）
+   autoconfigure:
+     exclude:
+@@ -18,9 +23,9 @@
+   # MySQL ???????????
+   datasource:
+     driver-class-name: com.mysql.cj.jdbc.Driver
+-    url: jdbc:mysql://localhost:3306/mokaDoc
++    url: jdbc:mysql://localhost:3306/knowledge_base_system
+     username: root
+-    password: 114514
++    password: Lipeize2005
+   # Redis ????????
+   data:
+     redis:
+@@ -70,6 +75,30 @@
+     redis:
+       host: localhost
+       port: 6379
++  open-ai:
++    streaming-chat-model:
++      base-url: https://api.deepseek.com/v1
++      api-key: sk-925ef1852c3f420aaa442b86a34bafbf
++      model-name: deepseek-v4-pro
++
++# Neo4j 图数据库配置（原生 Bolt Driver）
++neo4j:
++  uri: bolt://localhost:7687
++  username: neo4j
++  password: neo4j123
++  pool:
++    max-connection-pool-size: 50
++    connection-acquisition-timeout: 30s
++
++# 图谱构建抽取 LLM 配置（独立于会话 LLM，可指定不同模型）
++graph:
++  extraction:
++    llm:
++      base-url: ${langchain4j.open-ai.streaming-chat-model.base-url}
++      api-key: ${langchain4j.open-ai.streaming-chat-model.api-key}
++      model-name: deepseek-v4-pro
++      max-tokens: 4096
++      temperature: 0.1
+ 
+ # Elasticsearch 向量存储配置
+ elasticsearch:
+@@ -94,3 +123,7 @@
+   es:
+     max-results: 10
+     min-score: 0.75
++  # 图谱 RAG 混合配置
++  graph:
++    enabled: true           # 是否启用图谱检索
++    max-results: 5          # 图谱最大返回结果数
