@@ -1,5 +1,6 @@
 package com.kanade.backend.ai;
 
+import com.kanade.backend.ai.rag.RagReferenceCollector;
 import com.kanade.backend.ai.rag.orchestrator.AdvancedRagOrchestrator;
 import dev.langchain4j.memory.chat.ChatMemoryProvider;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
@@ -131,6 +132,25 @@ public class AiServiceFactory {
                 .streamingChatModel(openAiStreamingChatModel)
                 .chatMemoryProvider(chatMemoryProvider)
                 .retrievalAugmentor(advancedRagOrchestrator.createAdvancedRagAugmentor(userId))
+                .build();
+    }
+
+    /**
+     * 创建带文档范围过滤的进阶 RAG 聊天助手。
+     */
+    public AiChatService createAdvancedRagChatAssistant(Long userId, ContentRetriever documentRetriever) {
+        return createAdvancedRagChatAssistant(userId, documentRetriever, null);
+    }
+
+    public AiChatService createAdvancedRagChatAssistant(Long userId,
+                                                        ContentRetriever documentRetriever,
+                                                        RagReferenceCollector referenceCollector) {
+        log.info("🚀 [创建进阶RAG助手] 已配置用户/文档范围过滤 RetrievalAugmentor, userId={}", userId);
+        return AiServices.builder(AiChatService.class)
+                .streamingChatModel(openAiStreamingChatModel)
+                .chatMemoryProvider(chatMemoryProvider)
+                .retrievalAugmentor(advancedRagOrchestrator.createAdvancedRagAugmentor(
+                        userId, documentRetriever, referenceCollector))
                 .build();
     }
 

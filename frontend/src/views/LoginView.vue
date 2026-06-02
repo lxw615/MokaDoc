@@ -141,7 +141,7 @@ const handleLogin = async () => {
     console.log('[Login] 发送登录请求:', JSON.stringify(body))
     const res = await userLogin(body)
     console.log('[Login] 收到响应:', JSON.stringify(res.data))
-    if (res.data.code === 0 && res.data.data) {
+    if (res.data.code === 0 && res.data.data?.user) {
       userStore.setUser(res.data.data.user)
       message.success('登录成功')
       router.push('/document-management')

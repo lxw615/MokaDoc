@@ -5,15 +5,26 @@ import cn.hutool.core.util.StrUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.kanade.backend.dto.user.LoginVO;
+import com.kanade.backend.dto.user.OperationLogVO;
+import com.kanade.backend.dto.user.PasswordUpdateRequest;
+import com.kanade.backend.dto.user.StorageSummaryVO;
 import com.kanade.backend.dto.user.UserLoginRequest;
+import com.kanade.backend.dto.user.UserProfileUpdateRequest;
 import com.kanade.backend.dto.user.UserQueryRequest;
 import com.kanade.backend.dto.user.UserRegisterRequest;
 import com.kanade.backend.dto.user.UserVO;
+import com.kanade.backend.entity.Document;
+import com.kanade.backend.entity.GraphTask;
+import com.kanade.backend.entity.QaSession;
 import com.kanade.backend.entity.User;
 import com.kanade.backend.exception.BusinessException;
 import com.kanade.backend.exception.ErrorCode;
+import com.kanade.backend.mapper.GraphTaskMapper;
 import com.kanade.backend.mapper.UserMapper;
+import com.kanade.backend.service.DocumentService;
+import com.kanade.backend.service.QaSessionService;
 import com.kanade.backend.service.UserService;
+import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,6 +34,12 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /**
  * 用户表 服务层实现。
@@ -37,6 +54,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      * 盐值，用于密码加密混淆
      */
     private static final String SALT = "kanade_mokadoc";
+    private static final long DEFAULT_STORAGE_LIMIT_BYTES = 1024L * 1024L * 1024L;
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+
+    @Resource
+    private DocumentService documentService;
+
+    @Resource
+    private QaSessionService qaSessionService;
+
+    @Resource
+    private GraphTaskMapper graphTaskMapper;
 
     @Override
     public Long userRegister(UserRegisterRequest registerRequest) {
@@ -160,6 +188,160 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
+    public UserVO updateCurrentUserProfile(UserProfileUpdateRequest updateRequest, HttpServletRequest httpRequest) {
+        if (updateRequest == null) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "请求参数为空");
+        }
+
+        User currentUser = getLoginUser(httpRequest);
+        String username = StrUtil.trim(updateRequest.getUsername());
+        String email = StrUtil.trim(updateRequest.getEmail());
+        String nickname = StrUtil.trim(updateRequest.getNickname());
+
+        if (StrUtil.hasBlank(username, email)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名和邮箱不能为空");
+        }
+        if (username.length() < 4 || username.length() > 50) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名长度需为4-50位");
+        }
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "邮箱格式不正确");
+        }
+        if (StrUtil.isNotBlank(nickname) && nickname.length() > 50) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "昵称不能超过50位");
+        }
+
+        if (existsOtherUser("username", username, currentUser.getId())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户名已存在");
+        }
+        if (existsOtherUser("email", email, currentUser.getId())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "邮箱已被使用");
+        }
+
+        currentUser.setUsername(username);
+        currentUser.setEmail(email);
+        currentUser.setNickname(StrUtil.isNotBlank(nickname) ? nickname : username);
+        currentUser.setUpdateTime(LocalDateTime.now());
+
+        boolean updated = this.updateById(currentUser);
+        if (!updated) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "保存用户信息失败");
+        }
+
+        httpRequest.getSession().setAttribute("USER_LOGIN_STATE", currentUser);
+        log.info("用户资料更新成功: userId={}, username={}, email={}", currentUser.getId(), username, email);
+        return getUserVO(currentUser);
+    }
+
+    @Override
+    public boolean updateCurrentUserPassword(PasswordUpdateRequest updateRequest, HttpServletRequest httpRequest) {
+        if (updateRequest == null || StrUtil.hasBlank(
+                updateRequest.getCurrentPassword(),
+                updateRequest.getNewPassword(),
+                updateRequest.getConfirmPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码参数不能为空");
+        }
+        if (!Objects.equals(updateRequest.getNewPassword(), updateRequest.getConfirmPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "两次输入的新密码不一致");
+        }
+        if (updateRequest.getNewPassword().length() < 6) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "新密码长度不能少于6位");
+        }
+
+        User currentUser = getLoginUser(httpRequest);
+        String currentEncrypted = getEncryptPassword(updateRequest.getCurrentPassword());
+        if (!Objects.equals(currentEncrypted, currentUser.getPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "当前密码不正确");
+        }
+
+        currentUser.setPassword(getEncryptPassword(updateRequest.getNewPassword()));
+        currentUser.setUpdateTime(LocalDateTime.now());
+        boolean updated = this.updateById(currentUser);
+        if (!updated) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "密码修改失败");
+        }
+        httpRequest.getSession().setAttribute("USER_LOGIN_STATE", currentUser);
+        log.info("用户密码修改成功: userId={}", currentUser.getId());
+        return true;
+    }
+
+    @Override
+    public List<OperationLogVO> listCurrentUserOperationLogs(HttpServletRequest request) {
+        User currentUser = getLoginUser(request);
+        Long userId = currentUser.getId();
+        AtomicLong idGenerator = new AtomicLong(1);
+        List<OperationLogVO> logs = new ArrayList<>();
+
+        addLog(logs, idGenerator, currentUser.getRegisterTime(), "注册账号：" + currentUser.getUsername(), "用户");
+        addLog(logs, idGenerator, currentUser.getUpdateTime(), "更新个人资料", "用户");
+
+        QueryWrapper docQuery = QueryWrapper.create()
+                .eq("user_id", userId)
+                .eq("delete_flag", 0)
+                .orderBy("upload_time desc")
+                .limit(10);
+        List<Document> documents = documentService.list(docQuery);
+        for (Document doc : documents) {
+            addLog(logs, idGenerator, doc.getUploadTime(), "上传文档：" + doc.getName(), "文档");
+            addLog(logs, idGenerator, doc.getUpdateTime(), "更新文档信息：" + doc.getName(), "文档");
+        }
+
+        QueryWrapper sessionQuery = QueryWrapper.create()
+                .eq("user_id", userId)
+                .eq("delete_flag", 0)
+                .orderBy("create_time desc")
+                .limit(10);
+        List<QaSession> sessions = qaSessionService.list(sessionQuery);
+        for (QaSession session : sessions) {
+            addLog(logs, idGenerator, session.getCreateTime(), "创建问答会话：" + session.getSessionName(), "问答");
+            addLog(logs, idGenerator, session.getUpdateTime(), "更新问答会话：" + session.getSessionName(), "问答");
+        }
+
+        QueryWrapper graphTaskQuery = QueryWrapper.create()
+                .eq("user_id", userId)
+                .eq("delete_flag", 0)
+                .orderBy("create_time desc")
+                .limit(10);
+        List<GraphTask> graphTasks = graphTaskMapper.selectListByQuery(graphTaskQuery);
+        for (GraphTask task : graphTasks) {
+            addLog(logs, idGenerator, task.getCreateTime(), "启动图谱构建任务 #" + task.getId(), "图谱");
+            addLog(logs, idGenerator, task.getUpdateTime(), "图谱构建状态：" + graphStatusText(task.getStatus()), "图谱");
+        }
+
+        return logs.stream()
+                .filter(log -> log.getTime() != null)
+                .sorted(Comparator.comparing(OperationLogVO::getTime).reversed())
+                .limit(30)
+                .toList();
+    }
+
+    @Override
+    public StorageSummaryVO getCurrentUserStorageSummary(HttpServletRequest request) {
+        User currentUser = getLoginUser(request);
+        QueryWrapper queryWrapper = QueryWrapper.create()
+                .eq("user_id", currentUser.getId())
+                .eq("delete_flag", 0);
+        List<Document> documents = documentService.list(queryWrapper);
+
+        long usedBytes = documents.stream()
+                .map(Document::getFileSize)
+                .filter(Objects::nonNull)
+                .mapToLong(Long::longValue)
+                .sum();
+        int documentCount = documents.size();
+        long averageBytes = documentCount == 0 ? 0 : usedBytes / documentCount;
+        int usagePercent = (int) Math.min(100, Math.round(usedBytes * 100.0 / DEFAULT_STORAGE_LIMIT_BYTES));
+
+        return StorageSummaryVO.builder()
+                .usedBytes(usedBytes)
+                .totalBytes(DEFAULT_STORAGE_LIMIT_BYTES)
+                .usagePercent(usagePercent)
+                .documentCount(documentCount)
+                .averageBytes(averageBytes)
+                .build();
+    }
+
+    @Override
     public void userLogout() {
         HttpServletRequest request = getRequest();
         Object userObj = request.getSession().getAttribute("USER_LOGIN_STATE");
@@ -182,7 +364,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             // 从数据库查询当前用户信息（保证数据最新）
             long userId = currentUser.getId();
             currentUser = this.getById(userId);
-            if (currentUser == null) {
+            if (currentUser == null
+                    || Integer.valueOf(1).equals(currentUser.getDeleteFlag())
+                    || Integer.valueOf(0).equals(currentUser.getStatus())) {
                 throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
             }
             return currentUser;
@@ -201,6 +385,41 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         UserVO userVO = getUserVO(user);
         loginUserVO.setUser(userVO);
         return loginUserVO;
+    }
+
+    private boolean existsOtherUser(String field, String value, Long currentUserId) {
+        QueryWrapper queryWrapper = QueryWrapper.create()
+                .where(field + " = ? AND id <> ?", value, currentUserId);
+        return this.mapper.selectCountByQuery(queryWrapper) > 0;
+    }
+
+    private void addLog(List<OperationLogVO> logs,
+                        AtomicLong idGenerator,
+                        LocalDateTime time,
+                        String action,
+                        String source) {
+        if (time == null || StrUtil.isBlank(action)) {
+            return;
+        }
+        logs.add(OperationLogVO.builder()
+                .id(idGenerator.getAndIncrement())
+                .time(time)
+                .action(action)
+                .source(source)
+                .build());
+    }
+
+    private String graphStatusText(String status) {
+        if (status == null) {
+            return "未知";
+        }
+        return switch (status) {
+            case "PENDING" -> "待处理";
+            case "PROCESSING" -> "处理中";
+            case "COMPLETED" -> "已完成";
+            case "FAILED" -> "失败";
+            default -> status;
+        };
     }
 
     /**

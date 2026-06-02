@@ -18,7 +18,11 @@
             :class="{ active: selectedDocs.includes(doc.id) }"
             @click="toggleDocumentSelection(doc.id)"
           >
-            <a-checkbox :checked="selectedDocs.includes(doc.id)" @click.stop />
+            <a-checkbox
+              :checked="selectedDocs.includes(doc.id)"
+              @click.stop
+              @change="toggleDocumentSelection(doc.id)"
+            />
             <span class="doc-item-name">{{ doc.name }}</span>
           </div>
         </div>
@@ -97,7 +101,7 @@
           </div>
           <div class="legend-item">
             <span class="legend-color" style="background: #7A7A8A"></span>
-            <span>其他</span>
+            <span>文档/其他</span>
           </div>
         </div>
 
@@ -152,7 +156,7 @@
 
         <div class="graph-visualization" ref="graphContainerRef">
           <!-- vis-network 渲染在此 -->
-          <div v-if="!graphReady && !buildTask" class="graph-placeholder">
+          <div v-if="!graphReady && buildTask?.status !== 'PROCESSING'" class="graph-placeholder">
             <p>暂无图谱数据</p>
             <p class="graph-placeholder-hint">
               请先选择文档并点击"构建图谱"
@@ -210,7 +214,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { Network } from 'vis-network'
 import { DataSet } from 'vis-data'
@@ -220,6 +224,7 @@ import {
   listTasks,
   searchEntities as apiSearchEntities,
   getSubgraph as apiGetSubgraph,
+  getGraphData,
   getGraphStats,
   getStatsDetail,
   getBuildProgressUrl,
@@ -242,6 +247,7 @@ interface GraphEntity {
   name: string
   type: string
   neo4jId?: number
+  description?: string
 }
 
 interface GraphRelation {
@@ -256,10 +262,19 @@ interface BuildTask {
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
   progress: number
   errorMessage?: string
+  documentIds?: string
+  createTime?: string
+  updateTime?: string
 }
 
 interface SearchResult extends GraphEntity {
   relType?: string
+}
+
+const normalizeTaskStatus = (status?: string): BuildTask['status'] => {
+  return status === 'PENDING' || status === 'PROCESSING' || status === 'COMPLETED' || status === 'FAILED'
+    ? status
+    : 'PENDING'
 }
 
 // ==================== 响应式状态 ====================
@@ -291,7 +306,6 @@ let pieChartInstance: echarts.ECharts | null = null
 let barChartInstance: echarts.ECharts | null = null
 
 // 删除状态
-const deleteModalVisible = ref(false)
 const deleteConfirmInput = ref('')
 const deleteStep = ref(1)
 
@@ -432,7 +446,7 @@ function initNetwork() {
       layout: {
         improvedLayout: true,
       },
-    },
+    } as any,
   )
 
   // 点击节点事件
@@ -461,6 +475,10 @@ let buildAbortController: AbortController | null = null
 // ==================== 图谱构建 ====================
 async function triggerBuild() {
   if (buildLoading.value) return
+  if (documents.value.length === 0) {
+    message.warning('请先上传文档后再构建图谱')
+    return
+  }
 
   buildLoading.value = true
   buildTask.value = {
@@ -556,7 +574,7 @@ function startPolling(taskId: number) {
       const res = await getTask(taskId)
       if (res.data.code === 0 && res.data.data) {
         const t = res.data.data
-        buildTask.value!.status = t.status || 'PROCESSING'
+        buildTask.value!.status = normalizeTaskStatus(t.status || 'PROCESSING')
         buildTask.value!.progress = t.progress || 0
 
         if (t.status === 'COMPLETED') {
@@ -588,12 +606,14 @@ async function loadGraphForCurrentDoc() {
       // 有图谱数据才尝试渲染
       if ((stats.nodeCount || 0) > 0) {
         await loadExistingGraph()
+        await refreshTasks()
+        await loadQualityCharts()
         return
       }
     }
-    loadMockGraphData()
+    clearGraph()
   } catch {
-    loadMockGraphData()
+    clearGraph()
   }
 }
 
@@ -602,31 +622,32 @@ async function loadExistingGraph() {
     // 先用 stats 确认有数据，然后搜索实体渲染
     const statsRes = await getGraphStats()
     if (statsRes.data.code !== 0 || !statsRes.data.data || (statsRes.data.data.nodeCount || 0) === 0) {
-      loadMockGraphData()
+      clearGraph()
       return
     }
 
-    // 搜索所有实体（keyword为空查全部）
-    const res = await apiSearchEntities({ keyword: '', limit: 50 })
-    if (res.data.code === 0 && res.data.data && res.data.data.length > 0) {
-      const entities = res.data.data
-      // 选第一个有意义的实体名扩展子图
-      const firstEntity = entities.find((e: any) => (e.name || '').length >= 2) || entities[0]
-      const subRes = await apiGetSubgraph({ entityName: firstEntity.name || '', hops: 1 })
-      if (subRes.data.code === 0 && subRes.data.data) {
-        renderSubgraph(subRes.data.data)
-        graphReady.value = true
-        return
+    const graphRes = await getGraphData({ limit: 200 })
+    if (graphRes.data.code === 0 && graphRes.data.data) {
+      renderSubgraph(graphRes.data.data)
+      graphReady.value = (graphRes.data.data.nodes || []).length > 0
+      qualityStats.value = {
+        nodeCount: statsRes.data.data.nodeCount || 0,
+        relCount: statsRes.data.data.relCount || 0,
       }
+      return
     }
   } catch {
     console.error('加载图谱数据失败')
   }
-  loadMockGraphData()
+  clearGraph()
 }
 
 function triggerIncremental() {
-  message.info('增量更新功能将在后续版本实现')
+  if (selectedDocs.value.length === 0) {
+    message.warning('请选择需要增量更新的文档')
+    return
+  }
+  triggerBuild()
 }
 
 // ==================== 图谱搜索 ====================
@@ -668,7 +689,16 @@ function fitGraph() {
 }
 
 function exportGraph() {
-  message.info('导出功能将在后续版本实现')
+  const canvas = (networkInstance as any)?.canvas?.frame?.canvas as HTMLCanvasElement | undefined
+  if (!canvas || !graphReady.value) {
+    message.warning('当前没有可导出的图谱')
+    return
+  }
+  const link = document.createElement('a')
+  link.href = canvas.toDataURL('image/png')
+  link.download = `knowledge-graph-${Date.now()}.png`
+  link.click()
+  message.success('图谱图片已导出')
 }
 
 // ==================== 节点交互 ====================
@@ -733,22 +763,30 @@ function renderSubgraph(subgraph: { nodes: any[]; edges: any[] }) {
   const colorMap: Record<string, string> = {
     Concept: '#E8EAF6', Person: '#E8F5E9',
     Organization: '#FFF3E0', Project: '#FFEBEE',
+    Document: '#F3F0EB', Technology: '#E0F2F1',
+    Location: '#EDE7F6', Event: '#FFF8E1',
   }
   const borderMap: Record<string, string> = {
     Concept: '#4C5BA8', Person: '#4A9B7F',
     Organization: '#C8904A', Project: '#C4545C',
+    Document: '#7A7A8A', Technology: '#00897B',
+    Location: '#7E57C2', Event: '#D6A03D',
   }
 
   const nodeItems: any[] = []
   const edgeItems: any[] = []
+  const nodeIds = new Set<string>()
 
   if (subgraph.nodes) {
     for (const n of subgraph.nodes) {
+      const nodeId = String(n.entityId || n.name)
+      if (!nodeId || nodeIds.has(nodeId)) continue
+      nodeIds.add(nodeId)
       nodeItems.push({
-        id: n.entityId || n.name,
+        id: nodeId,
         label: n.name,
         group: n.type || 'Concept',
-        entityId: n.entityId || n.name,
+        entityId: nodeId,
         color: {
           background: colorMap[n.type] || '#F9F7F3',
           border: borderMap[n.type] || '#7A7A8A',
@@ -759,9 +797,13 @@ function renderSubgraph(subgraph: { nodes: any[]; edges: any[] }) {
 
   if (subgraph.edges) {
     for (const e of subgraph.edges) {
+      const from = String(e.fromEntityId || e.from || '')
+      const to = String(e.toEntityId || e.to || '')
+      if (!nodeIds.has(from) || !nodeIds.has(to)) continue
       edgeItems.push({
-        from: e.fromEntityId || e.from,
-        to: e.toEntityId || e.to,
+        id: `${from}->${to}:${e.type || e.label || 'RELATED_TO'}`,
+        from,
+        to,
         label: e.type || 'RELATED_TO',
       })
     }
@@ -786,6 +828,15 @@ function renderSubgraph(subgraph: { nodes: any[]; edges: any[] }) {
   })
 }
 
+function clearGraph() {
+  nodesDataSet?.clear()
+  edgesDataSet?.clear()
+  graphReady.value = false
+  selectedNode.value = null
+  selectedNodeRelations.value = []
+  qualityStats.value = { nodeCount: 0, relCount: 0 }
+}
+
 // ==================== 文档选择 ====================
 function toggleDocumentSelection(docId: number) {
   const idx = selectedDocs.value.indexOf(docId)
@@ -803,6 +854,10 @@ function entityTypeColor(type: string): string {
     Person: 'green',
     Organization: 'orange',
     Project: 'red',
+    Document: 'default',
+    Technology: 'cyan',
+    Location: 'purple',
+    Event: 'gold',
   }
   return colors[type] || 'default'
 }
@@ -814,35 +869,6 @@ function linkToQA() {
       query: { entity: selectedNode.value.name },
     })
   }
-}
-
-// ==================== 模拟图谱数据 ====================
-function loadMockGraphData() {
-  if (!nodesDataSet || !edgesDataSet) return
-
-  const mockNodes = [
-    { id: 'e1', label: '机器学习', group: 'Concept', entityId: 'e1', color: { background: '#E8EAF6', border: '#4C5BA8' } },
-    { id: 'e2', label: '监督学习', group: 'Concept', entityId: 'e2', color: { background: '#E8EAF6', border: '#4C5BA8' } },
-    { id: 'e3', label: '神经网络', group: 'Concept', entityId: 'e3', color: { background: '#E8EAF6', border: '#4C5BA8' } },
-    { id: 'e4', label: '深度学习', group: 'Concept', entityId: 'e4', color: { background: '#E8EAF6', border: '#4C5BA8' } },
-    { id: 'e5', label: '吴恩达', group: 'Person', entityId: 'e5', color: { background: '#E8F5E9', border: '#4A9B7F' } },
-  ]
-
-  const mockEdges = [
-    { from: 'e1', to: 'e2', label: '包含', entityId: 'e1_e2' },
-    { from: 'e2', to: 'e3', label: '使用', entityId: 'e2_e3' },
-    { from: 'e1', to: 'e4', label: '关联', entityId: 'e1_e4' },
-    { from: 'e3', to: 'e4', label: '关联', entityId: 'e3_e4' },
-    { from: 'e5', to: 'e1', label: '讲授', entityId: 'e5_e1' },
-  ]
-
-  nodesDataSet.add(mockNodes)
-  edgesDataSet.add(mockEdges)
-  graphReady.value = true
-
-  nextTick(() => {
-    networkInstance?.fit({ animation: true })
-  })
 }
 
 // ==================== 质量监控 ====================
@@ -866,7 +892,15 @@ async function loadQualityCharts() {
         relCount: detail.relCount || 0,
       }
       renderPieChart(detail.typeDistribution || [])
-      renderBarChart(detail.recentTasks || [])
+      renderBarChart((detail.recentTasks || []).map((t: any) => ({
+        id: t.id || 0,
+        status: normalizeTaskStatus(t.status),
+        progress: t.progress || 0,
+        errorMessage: t.errorMessage,
+        documentIds: t.documentIds,
+        createTime: t.createTime,
+        updateTime: t.updateTime,
+      })))
     }
   } catch {
     console.error('加载质量数据失败')
@@ -932,7 +966,7 @@ async function refreshTasks() {
     if (res.data.code === 0 && res.data.data) {
       taskList.value = res.data.data.map((t: any) => ({
         id: t.id || 0,
-        status: t.status || 'PENDING',
+        status: normalizeTaskStatus(t.status),
         progress: t.progress || 0,
         errorMessage: t.errorMessage,
         documentIds: t.documentIds,
@@ -1017,10 +1051,10 @@ function confirmDeleteStep3() {
         const res = await deleteGraph('DELETE')
         if (res.data.code === 0) {
           message.success('图谱数据已删除')
-          graphReady.value = false
+          clearGraph()
+          buildTask.value = null
           qualityStats.value = { nodeCount: 0, relCount: 0 }
-          if (nodesDataSet) nodesDataSet.clear()
-          if (edgesDataSet) edgesDataSet.clear()
+          searchResults.value = []
           refreshTasks()
         } else {
           message.error(res.data.message || '删除失败')

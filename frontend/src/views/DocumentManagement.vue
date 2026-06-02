@@ -7,7 +7,7 @@
       <input
         ref="fileInputRef"
         type="file"
-        accept=".pdf,.doc,.docx,.txt,.md"
+        accept=".pdf,.docx,.xlsx,.xls,.txt,.md,.markdown,.json,.csv,.java,.vue,.js,.ts,.xml,.yml,.yaml"
         style="display: none"
         @change="handleFileSelected"
       />
@@ -92,6 +92,7 @@ const loading = ref(false)
 const uploadLoading = ref(false)
 const deletingId = ref<number | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const MAX_UPLOAD_SIZE = 200 * 1024 * 1024
 
 // 文档列表
 interface DocItem {
@@ -112,6 +113,15 @@ const fetchDocuments = async () => {
     const res = await list()
     if (res.data.code === 0 && res.data.data) {
       documents.value = res.data.data
+        .filter((doc): doc is API.DocumentVO & { id: number } => doc.id !== undefined)
+        .map(doc => ({
+          id: doc.id,
+          name: doc.name || '未命名文档',
+          fileType: doc.fileType || '',
+          fileSize: doc.fileSize || 0,
+          uploadTime: doc.uploadTime || '',
+          description: doc.description,
+        }))
     } else {
       message.error(res.data.message || '获取文档列表失败')
     }
@@ -178,6 +188,11 @@ const handleFileSelected = async (e: Event) => {
   const target = e.target as HTMLInputElement
   const file = target.files?.[0]
   if (!file) return
+  if (file.size > MAX_UPLOAD_SIZE) {
+    message.error('文件过大，最大支持 200MB，请压缩后重试')
+    target.value = ''
+    return
+  }
 
   uploadLoading.value = true
   try {
@@ -188,8 +203,16 @@ const handleFileSelected = async (e: Event) => {
     } else {
       message.error(res.data.message || '上传失败')
     }
-  } catch {
-    message.error('文件上传失败，请稍后重试')
+  } catch (error: any) {
+    console.error('文件上传失败:', error)
+    const responseData = error?.response?.data
+    message.error(
+      responseData?.message ||
+      responseData?.error ||
+      (error?.response?.status ? `文件上传失败，HTTP ${error.response.status}` : '') ||
+      error?.message ||
+      '文件上传失败'
+    )
   } finally {
     uploadLoading.value = false
     // 重置 input 以允许再次选择同一文件

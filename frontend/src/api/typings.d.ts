@@ -53,6 +53,18 @@ declare namespace API {
     message?: string
   }
 
+  type BaseResponseOperationLogList = {
+    code?: number
+    data?: OperationLogVO[]
+    message?: string
+  }
+
+  type BaseResponseStorageSummary = {
+    code?: number
+    data?: StorageSummaryVO
+    message?: string
+  }
+
   type checkMd5Params = {
     md5: string
   }
@@ -169,6 +181,18 @@ declare namespace API {
     password?: string
   }
 
+  type UserProfileUpdateRequest = {
+    username?: string
+    email?: string
+    nickname?: string
+  }
+
+  type PasswordUpdateRequest = {
+    currentPassword?: string
+    newPassword?: string
+    confirmPassword?: string
+  }
+
   type UserQuestion = {
     content?: string
     sessionId?: number
@@ -192,6 +216,21 @@ declare namespace API {
     registerTime?: string
     updateTime?: string
     password?: string
+  }
+
+  type OperationLogVO = {
+    id?: number
+    time?: string
+    action?: string
+    source?: string
+  }
+
+  type StorageSummaryVO = {
+    usedBytes?: number
+    totalBytes?: number
+    usagePercent?: number
+    documentCount?: number
+    averageBytes?: number
   }
 
   // ========== 图谱模块类型 ==========

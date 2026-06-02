@@ -2,10 +2,12 @@ package com.kanade.backend.graph;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.kanade.backend.document.DocumentParseService;
 import com.knuddels.jtokkit.Encodings;
 import com.knuddels.jtokkit.api.Encoding;
 import com.knuddels.jtokkit.api.EncodingRegistry;
 import com.knuddels.jtokkit.api.EncodingType;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -27,6 +29,9 @@ public class GraphDocumentPreprocessor {
 
     @Value("${file.upload.dir:./uploads/documents}")
     private String uploadDir;
+
+    @Resource
+    private DocumentParseService documentParseService;
 
     private final Encoding encoding;
     private static final int MAX_TEXT_LENGTH = 500_000; // 单文档最大读取字符数
@@ -91,6 +96,13 @@ public class GraphDocumentPreprocessor {
      */
     private String extractText(Path path, String docName) {
         String fileName = docName != null ? docName.toLowerCase() : path.getFileName().toString().toLowerCase();
+        String fileType = getFileExtension(fileName);
+
+        try {
+            return documentParseService.parseAsText(path, fileType);
+        } catch (Exception e) {
+            log.warn("⚠️ [文本提取] 统一解析失败: {}, fallback={}, error={}", fileName, path, e.getMessage());
+        }
 
         if (fileName.endsWith(".txt") || fileName.endsWith(".md")) {
             // 纯文本文件直接读取
@@ -227,5 +239,13 @@ public class GraphDocumentPreprocessor {
                 .replace("&apos;", "'");
 
         return result.trim();
+    }
+
+    private String getFileExtension(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex > 0 && dotIndex < fileName.length() - 1) {
+            return fileName.substring(dotIndex + 1).toLowerCase();
+        }
+        return "";
     }
 }

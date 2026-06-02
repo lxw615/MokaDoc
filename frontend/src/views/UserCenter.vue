@@ -45,17 +45,23 @@
           <div class="user-info-form">
             <div class="form-group">
               <label>用户名</label>
-              <input type="text" v-model="userInfo.username" disabled>
+              <input type="text" v-model="userInfo.username" :disabled="profileLoading || savingProfile">
             </div>
             <div class="form-group">
               <label>邮箱</label>
-              <input type="email" v-model="userInfo.email">
+              <input type="email" v-model="userInfo.email" :disabled="profileLoading || savingProfile">
+            </div>
+            <div class="form-group">
+              <label>昵称</label>
+              <input type="text" v-model="userInfo.nickname" :disabled="profileLoading || savingProfile">
             </div>
             <div class="form-group">
               <label>注册时间</label>
               <input type="text" v-model="userInfo.registerDate" disabled>
             </div>
-            <button class="btn btn-primary" @click="saveProfile">保存修改</button>
+            <button class="btn btn-primary" :disabled="savingProfile" @click="saveProfile">
+              {{ savingProfile ? '保存中...' : '保存修改' }}
+            </button>
           </div>
         </div>
 
@@ -65,17 +71,19 @@
           <div class="user-info-form">
             <div class="form-group">
               <label>当前密码</label>
-              <input type="password" v-model="passwordForm.currentPassword" placeholder="请输入当前密码">
+              <input type="password" v-model="passwordForm.currentPassword" placeholder="请输入当前密码" :disabled="savingPassword">
             </div>
             <div class="form-group">
               <label>新密码</label>
-              <input type="password" v-model="passwordForm.newPassword" placeholder="请输入新密码">
+              <input type="password" v-model="passwordForm.newPassword" placeholder="请输入新密码" :disabled="savingPassword">
             </div>
             <div class="form-group">
               <label>确认新密码</label>
-              <input type="password" v-model="passwordForm.confirmPassword" placeholder="请确认新密码">
+              <input type="password" v-model="passwordForm.confirmPassword" placeholder="请确认新密码" :disabled="savingPassword">
             </div>
-            <button class="btn btn-primary" @click="changePassword">修改密码</button>
+            <button class="btn btn-primary" :disabled="savingPassword" @click="changePassword">
+              {{ savingPassword ? '修改中...' : '修改密码' }}
+            </button>
           </div>
         </div>
 
@@ -83,11 +91,15 @@
         <div v-if="activeTab === 'logs'" class="user-info-section">
           <h3>操作日志</h3>
           <div class="log-list">
-            <div v-for="log in operationLogs" :key="log.id" class="log-item">
-              <div class="log-time">{{ log.time }}</div>
-              <div class="log-action">{{ log.action }}</div>
-              <div class="log-ip">IP: {{ log.ip }}</div>
-            </div>
+            <div v-if="logsLoading" class="user-empty">正在加载操作日志...</div>
+            <div v-else-if="operationLogs.length === 0" class="user-empty">暂无操作日志</div>
+            <template v-else>
+              <div v-for="log in operationLogs" :key="log.id" class="log-item">
+                <div class="log-time">{{ log.time }}</div>
+                <div class="log-action">{{ log.action }}</div>
+                <div class="log-ip">{{ log.source }}</div>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -116,11 +128,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
+import { message } from 'ant-design-vue'
+import { getCurrentUser, updateProfile, updatePassword, listOperationLogs, getStorageSummary } from '@/api/yonghuguanli'
+import { useUserStore } from '@/stores/user'
 
 interface UserInfo {
   username: string
   email: string
+  nickname: string
   registerDate: string
 }
 
@@ -134,16 +150,23 @@ interface OperationLog {
   id: number
   time: string
   action: string
-  ip: string
+  source: string
 }
 
 const activeTab = ref('profile')
+const userStore = useUserStore()
+
+const profileLoading = ref(false)
+const savingProfile = ref(false)
+const savingPassword = ref(false)
+const logsLoading = ref(false)
 
 // 用户信息
 const userInfo = reactive<UserInfo>({
-  username: '用户',
-  email: 'user@example.com',
-  registerDate: '2024-01-01'
+  username: '',
+  email: '',
+  nickname: '',
+  registerDate: ''
 })
 
 // 密码表单
@@ -154,53 +177,187 @@ const passwordForm = reactive<PasswordForm>({
 })
 
 // 操作日志
-const operationLogs = ref<OperationLog[]>([
-  { id: 1, time: '2024-01-15 10:30:00', action: '登录系统', ip: '192.168.1.100' },
-  { id: 2, time: '2024-01-15 11:20:00', action: '上传文档: 机器学习入门.pdf', ip: '192.168.1.100' },
-  { id: 3, time: '2024-01-15 14:15:00', action: '删除文档: 测试文档.txt', ip: '192.168.1.100' },
-  { id: 4, time: '2024-01-16 09:00:00', action: '登录系统', ip: '192.168.1.100' }
-])
+const operationLogs = ref<OperationLog[]>([])
 
 // 存储信息
-const usedStorage = ref('6.8MB')
+const usedStorage = ref('0B')
 const totalStorage = ref('1GB')
-const storageUsage = ref(0.66)
-const documentCount = ref(3)
-const averageSize = ref('2.27MB')
+const storageUsage = ref(0)
+const documentCount = ref(0)
+const averageSize = ref('0B')
+
+const applyUserInfo = (user?: API.UserVO | null) => {
+  if (!user) return
+  userInfo.username = user.username || ''
+  userInfo.email = user.email || ''
+  userInfo.nickname = user.nickname || user.username || ''
+  userInfo.registerDate = formatTime(user.registerTime)
+}
+
+const formatTime = (value?: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value.replace('T', ' ').slice(0, 19)
+  }
+  const pad = (num: number) => String(num).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+const formatBytes = (bytes?: number) => {
+  const value = Number(bytes || 0)
+  if (value < 1024) return `${value}B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let size = value / 1024
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex++
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)}${units[unitIndex]}`
+}
+
+const loadProfile = async () => {
+  profileLoading.value = true
+  try {
+    applyUserInfo(userStore.currentUser)
+    const res = await getCurrentUser()
+    if (res.data.code === 0 && res.data.data) {
+      userStore.setUser(res.data.data)
+      applyUserInfo(res.data.data)
+    } else {
+      message.error(res.data.message || '获取用户信息失败')
+    }
+  } catch {
+    message.error('获取用户信息失败')
+  } finally {
+    profileLoading.value = false
+  }
+}
+
+const loadLogs = async () => {
+  logsLoading.value = true
+  try {
+    const res = await listOperationLogs()
+    if (res.data.code === 0 && res.data.data) {
+      operationLogs.value = res.data.data.map((log, index) => ({
+        id: log.id || index + 1,
+        time: formatTime(log.time),
+        action: log.action || '',
+        source: log.source || '系统',
+      }))
+    } else {
+      operationLogs.value = []
+    }
+  } catch {
+    operationLogs.value = []
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+const loadStorage = async () => {
+  try {
+    const res = await getStorageSummary()
+    if (res.data.code === 0 && res.data.data) {
+      const summary = res.data.data
+      usedStorage.value = formatBytes(summary.usedBytes)
+      totalStorage.value = formatBytes(summary.totalBytes)
+      storageUsage.value = summary.usagePercent || 0
+      documentCount.value = summary.documentCount || 0
+      averageSize.value = formatBytes(summary.averageBytes)
+    }
+  } catch {
+    usedStorage.value = '0B'
+    storageUsage.value = 0
+    documentCount.value = 0
+    averageSize.value = '0B'
+  }
+}
 
 // 保存个人信息
-const saveProfile = () => {
-  // TODO: 调用API保存用户信息
-  console.log('保存用户信息:', userInfo)
-  alert('保存成功！')
+const saveProfile = async () => {
+  if (!userInfo.username.trim() || !userInfo.email.trim()) {
+    message.warning('用户名和邮箱不能为空')
+    return
+  }
+
+  savingProfile.value = true
+  try {
+    const res = await updateProfile({
+      username: userInfo.username.trim(),
+      email: userInfo.email.trim(),
+      nickname: userInfo.nickname.trim() || userInfo.username.trim(),
+    })
+    if (res.data.code === 0 && res.data.data) {
+      userStore.setUser(res.data.data)
+      applyUserInfo(res.data.data)
+      message.success('保存成功')
+      loadLogs()
+    } else {
+      message.error(res.data.message || '保存失败')
+    }
+  } catch {
+    message.error('保存失败，请稍后重试')
+  } finally {
+    savingProfile.value = false
+  }
 }
 
 // 修改密码
-const changePassword = () => {
+const changePassword = async () => {
+  if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+    message.warning('请完整填写密码信息')
+    return
+  }
   if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    alert('两次输入的新密码不一致')
+    message.warning('两次输入的新密码不一致')
     return
   }
   
   if (passwordForm.newPassword.length < 6) {
-    alert('密码长度不能少于6位')
+    message.warning('密码长度不能少于6位')
     return
   }
 
-  // TODO: 调用API修改密码
-  console.log('修改密码')
-  alert('密码修改成功！')
-  
-  // 清空表单
-  passwordForm.currentPassword = ''
-  passwordForm.newPassword = ''
-  passwordForm.confirmPassword = ''
+  savingPassword.value = true
+  try {
+    const res = await updatePassword({ ...passwordForm })
+    if (res.data.code === 0 && res.data.data) {
+      message.success('密码修改成功')
+      passwordForm.currentPassword = ''
+      passwordForm.newPassword = ''
+      passwordForm.confirmPassword = ''
+      loadLogs()
+    } else {
+      message.error(res.data.message || '密码修改失败')
+    }
+  } catch {
+    message.error('密码修改失败，请稍后重试')
+  } finally {
+    savingPassword.value = false
+  }
 }
+
+onMounted(() => {
+  loadProfile()
+  loadLogs()
+  loadStorage()
+})
 </script>
 
 <style scoped>
 .log-list {
   margin-top: 20px;
+}
+
+.user-empty {
+  padding: 20px 12px;
+  color: #7A7A8A;
+  text-align: center;
+  border: 1px dashed var(--border-color, #E6E3DC);
+  border-radius: 6px;
+  background: #F9F7F3;
 }
 
 .log-item {

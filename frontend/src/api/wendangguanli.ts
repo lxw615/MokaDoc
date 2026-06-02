@@ -76,7 +76,7 @@ export async function list(options?: { [key: string]: any }) {
 export async function upload(body: File | FormData, options?: { [key: string]: any }) {
   const formData = body instanceof FormData ? body : new FormData()
   if (body instanceof File) {
-    formData.append('file', body)
+    formData.append('file', body, body.name)
   }
   return request<API.BaseResponseDocumentVO>('/document/upload', {
     method: 'POST',

@@ -57,9 +57,9 @@ public class CypherTemplateEngine {
     public List<Map<String, Object>> entityRelations(String entityId, Long userId, int limit) {
         List<com.kanade.backend.entity.GraphEdge> rels = new ArrayList<>();
         rels.addAll(edgeMapper.selectListByQuery(
-            QueryWrapper.create().eq("user_id", userId).eq("from_entity_id", entityId).limit(limit)));
+            QueryWrapper.create().eq("user_id", userId).eq("delete_flag", 0).eq("from_entity_id", entityId).limit(limit)));
         rels.addAll(edgeMapper.selectListByQuery(
-            QueryWrapper.create().eq("user_id", userId).eq("to_entity_id", entityId).limit(limit)));
+            QueryWrapper.create().eq("user_id", userId).eq("delete_flag", 0).eq("to_entity_id", entityId).limit(limit)));
         
         return rels.stream()
             .map(e -> Map.<String, Object>of(

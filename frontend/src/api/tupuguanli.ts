@@ -58,6 +58,21 @@ export async function getSubgraph(
   )
 }
 
+/** 获取图谱可视化数据 GET /api/graph/data */
+export async function getGraphData(
+  params?: { limit?: number },
+  options?: { [key: string]: any },
+) {
+  return request<{ code?: number; data?: { nodes: any[]; edges: any[] }; message?: string }>(
+    '/graph/data',
+    {
+      method: 'GET',
+      params: { ...(params || {}) },
+      ...(options || {}),
+    },
+  )
+}
+
 /** 图谱统计 GET /api/graph/stats */
 export async function getGraphStats(options?: { [key: string]: any }) {
   return request<{ code?: number; data?: { nodeCount: number; relCount: number }; message?: string }>(
@@ -104,4 +119,13 @@ export async function deleteGraph(
 /** SSE 订阅构建进度 GET /api/graph/build/progress/{taskId} */
 export function getBuildProgressUrl(taskId: number): string {
   return `/api/graph/build/progress/${taskId}`
+}
+
+/** 获取知识脑图树 GET /graph/mindmap */
+export async function getMindMap(params?: { rootName?: string; limit?: number }, options?: { [key: string]: any }) {
+  return request<{ code?: number; data?: any; message?: string }>('/graph/mindmap', {
+    method: 'GET',
+    params: { ...(params || {}) },
+    ...(options || {}),
+  })
 }

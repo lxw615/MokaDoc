@@ -8,9 +8,13 @@ import com.kanade.backend.dto.chat.CreateSessionRequest;
 import com.kanade.backend.dto.chat.UpdateSessionRequest;
 import com.kanade.backend.entity.QaMessage;
 import com.kanade.backend.entity.QaSession;
+import com.kanade.backend.entity.QaReference;
 import com.kanade.backend.entity.User;
+import com.kanade.backend.exception.BusinessException;
+import com.kanade.backend.exception.ErrorCode;
 import com.kanade.backend.service.QaMessageService;
 import com.kanade.backend.service.QaSessionService;
+import com.kanade.backend.service.QaReferenceService;
 import com.kanade.backend.service.UserService;
 import com.kanade.backend.sse.SseEmitterManager;
 import com.mybatisflex.core.paginate.Page;
@@ -46,6 +50,9 @@ public class ChatController {
     private SseEmitterManager sseEmitterManager;
     @Autowired
     private QaMessageService qaMessageService;
+
+    @Resource
+    private QaReferenceService qaReferenceService;
 
     /**
      * 智能问答接口(自动创建会话)
@@ -94,18 +101,20 @@ public class ChatController {
             qaSessionService.sendMessage(finalSessionId, question.getContent(), question.getDocumentIds())
                 .doOnNext(jsonData -> {
                     try {
-                        sseEmitterManager.send(finalSessionId.toString(), jsonData);
+                        emitter.send(SseEmitter.event()
+                                .name("message")
+                                .data(jsonData));
                     } catch (Exception e) {
                         log.warn("发送 SSE 消息失败: {}", e.getMessage());
                     }
                 })
                 .doOnComplete(() -> {
-                    sseEmitterManager.complete(finalSessionId.toString());
+                    emitter.complete();
                     log.debug("✅ [响应完成] sessionId={}", finalSessionId);
                 })
                 .doOnError(error -> {
                     log.error("❌ [响应失败] sessionId={}, error={}", finalSessionId, error.getMessage());
-                    sseEmitterManager.complete(finalSessionId.toString());
+                    emitter.complete();
                 })
                 .subscribe();
 
@@ -177,7 +186,25 @@ public class ChatController {
                                                   @RequestParam(required = false) LocalDateTime lastCreateTime,
                                                   HttpServletRequest request){
         User currentUser = userService.getLoginUser(request);
+        QaSession session = qaSessionService.getById(sessionId);
+        if (session == null || Integer.valueOf(1).equals(session.getDeleteFlag())) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR, "会话不存在");
+        }
+        if (!session.getUserId().equals(currentUser.getId())) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权查看此会话");
+        }
         Page<QaMessage> sessions = qaMessageService.listSessionChatByPage(sessionId, pageSize, lastCreateTime, currentUser.getId());
         return ResultUtils.success(sessions);
     }
+    /**
+     * 查询某条 AI 消息的引用溯源。
+     */
+    @GetMapping("/message/{messageId}/references")
+    @Operation(summary = "获取回答引用溯源")
+    public BaseResponse<List<QaReference>> listReferences(@PathVariable Long messageId,
+                                                           HttpServletRequest request) {
+        User currentUser = userService.getLoginUser(request);
+        return ResultUtils.success(qaReferenceService.listByMessageId(messageId, currentUser.getId()));
+    }
+
 }

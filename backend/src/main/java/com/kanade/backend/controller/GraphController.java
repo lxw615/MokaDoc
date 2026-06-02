@@ -67,13 +67,14 @@ public class GraphController {
         Long userId = getLoginUserId();
 
         // 解析选中文档 ID 列表
-        @SuppressWarnings("unchecked")
-        List<Integer> docIdInts = body != null && body.containsKey("documentIds")
-            ? (List<Integer>) body.get("documentIds")
+        Object rawDocumentIds = body == null ? null : body.get("documentIds");
+        List<Long> documentIds = rawDocumentIds instanceof List<?> rawList
+            ? rawList.stream()
+                .filter(Number.class::isInstance)
+                .map(Number.class::cast)
+                .map(Number::longValue)
+                .toList()
             : List.of();
-        List<Long> documentIds = docIdInts.stream()
-            .map(Long::valueOf)
-            .toList();
 
         // 创建任务记录
         GraphTask task = GraphTask.builder()
@@ -169,6 +170,16 @@ public class GraphController {
     }
 
     /**
+     * 获取当前用户全量图谱数据。
+     */
+    @GetMapping("/data")
+    @Operation(summary = "图谱数据", description = "获取当前用户图谱节点和关系，用于前端可视化")
+    public BaseResponse<Map<String, Object>> graphData(@RequestParam(defaultValue = "200") int limit) {
+        Long userId = getLoginUserId();
+        return ResultUtils.success(graphCrudService.fullGraph(userId, limit));
+    }
+
+    /**
      * 图谱统计信息。
      */
     @GetMapping("/stats")
@@ -208,6 +219,30 @@ public class GraphController {
         detail.put("recentTasks", recentTasks);
 
         return ResultUtils.success(detail);
+    }
+
+
+    /**
+     * 脑图数据：把图谱节点转换成前端更容易渲染的树形结构。
+     */
+    @GetMapping("/mindmap")
+    @Operation(summary = "知识脑图数据", description = "将当前用户知识图谱转换为脑图树结构")
+    public BaseResponse<Map<String, Object>> mindmap(@RequestParam(defaultValue = "MokaDoc 知识库") String rootName,
+                                                      @RequestParam(defaultValue = "200") int limit) {
+        Long userId = getLoginUserId();
+        List<GraphEntity> entities = graphCrudService.searchEntities("", userId, limit);
+        Map<String, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        for (GraphEntity entity : entities) {
+            String type = entity.getType() == null || entity.getType().isBlank() ? "Concept" : entity.getType();
+            grouped.computeIfAbsent(type, k -> new java.util.ArrayList<>())
+                    .add(Map.of("name", entity.getName(), "entityId", entity.getEntityId(), "type", type));
+        }
+        List<Map<String, Object>> children = new java.util.ArrayList<>();
+        grouped.forEach((type, nodes) -> children.add(Map.of("name", type, "children", nodes)));
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("name", rootName);
+        root.put("children", children);
+        return ResultUtils.success(root);
     }
 
     /**

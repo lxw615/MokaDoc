@@ -20,7 +20,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/mokaDoc
     username: root
-    password: 114514
+    password: 12345678
   # Redis ????????
   data:
     redis:
@@ -31,8 +31,8 @@ spring:
       ttl: 3600
   servlet:
     multipart:
-      max-file-size: 50MB
-      max-request-size: 60MB
+      max-file-size: 200MB
+      max-request-size: 220MB
 
 mybatis-flex:
   configuration:
@@ -66,6 +66,12 @@ file:
     dir: ./uploads/documents
 
 langchain4j:
+  open-ai:
+    streaming-chat-model:
+      api-key: sk-5be77ef5a0ce4773b16493ec5da120aa
+      base-url: https://api.deepseek.com
+      model-name: deepseek-v4-flash
+
   community:
     redis:
       host: localhost
@@ -94,3 +100,10 @@ rag:
   es:
     max-results: 10
     min-score: 0.75
+
+graph:
+  extraction:
+    llm:
+      base-url: https://api.deepseek.com/
+      api-key: sk-5be77ef5a0ce4773b16493ec5da120aa
+      model-name: deepseek-v4-flash

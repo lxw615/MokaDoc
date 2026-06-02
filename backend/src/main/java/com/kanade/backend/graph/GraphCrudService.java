@@ -88,7 +88,8 @@ public class GraphCrudService {
         qw.eq("from_entity_id", relation.getFromEntityId())
             .eq("to_entity_id", relation.getToEntityId())
             .eq("rel_type", relation.getType())
-            .eq("user_id", relation.getUserId());
+            .eq("user_id", relation.getUserId())
+            .eq("delete_flag", 0);
         if (edgeMapper.selectCountByQuery(qw) == 0) {
             GraphEdge edge = toEdge(relation);
             edgeMapper.insert(edge);
@@ -129,13 +130,13 @@ public class GraphCrudService {
             // 查询所有与 eid 相关的关系（from 或 to）
             List<GraphEdge> rels = new ArrayList<>();
             rels.addAll(edgeMapper.selectListByQuery(
-                QueryWrapper.create().eq("user_id", userId).eq("from_entity_id", eid)));
+                QueryWrapper.create().eq("user_id", userId).eq("delete_flag", 0).eq("from_entity_id", eid)));
             rels.addAll(edgeMapper.selectListByQuery(
-                QueryWrapper.create().eq("user_id", userId).eq("to_entity_id", eid)));
+                QueryWrapper.create().eq("user_id", userId).eq("delete_flag", 0).eq("to_entity_id", eid)));
             for (GraphEdge rel : rels) {
                 String otherId = rel.getFromEntityId().equals(eid) ? rel.getToEntityId() : rel.getFromEntityId();
                 QueryWrapper nqw = new QueryWrapper();
-                nqw.eq("entity_id", otherId).eq("user_id", userId);
+                nqw.eq("entity_id", otherId).eq("user_id", userId).eq("delete_flag", 0);
                 GraphNode other = nodeMapper.selectOneByQuery(nqw);
                 if (other != null) {
                     nodes.add(Map.of("name", other.getName(), "type", other.getType(), "entityId", other.getEntityId()));
@@ -152,11 +153,49 @@ public class GraphCrudService {
         return result;
     }
 
+    public Map<String, Object> fullGraph(Long userId, int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 300));
+        QueryWrapper nodeQuery = QueryWrapper.create()
+                .eq("user_id", userId)
+                .eq("delete_flag", 0)
+                .orderBy("update_time", false)
+                .limit(safeLimit);
+        List<GraphNode> graphNodes = nodeMapper.selectListByQuery(nodeQuery);
+        Set<String> nodeIds = graphNodes.stream()
+                .map(GraphNode::getEntityId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        List<Map<String, Object>> nodes = graphNodes.stream()
+                .map(node -> Map.<String, Object>of(
+                        "name", node.getName(),
+                        "type", node.getType(),
+                        "entityId", node.getEntityId()))
+                .toList();
+
+        List<Map<String, Object>> edges = edgeMapper.selectListByQuery(
+                        QueryWrapper.create()
+                                .eq("user_id", userId)
+                                .eq("delete_flag", 0)
+                                .limit(safeLimit * 2))
+                .stream()
+                .filter(edge -> nodeIds.contains(edge.getFromEntityId()) && nodeIds.contains(edge.getToEntityId()))
+                .map(edge -> Map.<String, Object>of(
+                        "fromEntityId", edge.getFromEntityId(),
+                        "toEntityId", edge.getToEntityId(),
+                        "type", edge.getRelType()))
+                .toList();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("nodes", nodes);
+        result.put("edges", edges);
+        return result;
+    }
+
     // ==================== 删除 ====================
 
     public int deleteAllByUser(Long userId) {
         QueryWrapper ew = new QueryWrapper();
-        ew.eq("user_id", userId);
+        ew.eq("user_id", userId).eq("delete_flag", 0);
         long relCount = edgeMapper.selectCountByQuery(ew);
         // 物理删除关系
         edgeMapper.deleteByQuery(ew);

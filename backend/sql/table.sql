@@ -25,13 +25,15 @@ CREATE TABLE `sys_document` (
                                 `file_type` varchar(20) NOT NULL COMMENT '文件类型',
                                 `file_size` bigint NOT NULL COMMENT '文件大小(字节)',
                                 `file_path` varchar(512) NOT NULL COMMENT '文件存储路径',
-                                `file_md5` varchar(32) UNIQUE COMMENT '文件MD5',
+                                `file_md5` varchar(32) NOT NULL COMMENT '文件MD5',
                                 `description` varchar(512) DEFAULT '' COMMENT '文档描述',
                                 `upload_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
                                 `update_time` datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
                                 `delete_flag` tinyint DEFAULT 0 COMMENT '逻辑删除 0未删 1已删',
                                 PRIMARY KEY (`id`),
                                 KEY `idx_user_id` (`user_id`),
+                                KEY `idx_file_md5` (`file_md5`),
+                                UNIQUE KEY `uk_user_file_md5` (`user_id`,`file_md5`),
                                 CONSTRAINT `fk_doc_user` FOREIGN KEY (`user_id`) REFERENCES `sys_user` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档表';
 

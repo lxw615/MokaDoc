@@ -1,5 +1,6 @@
 package com.kanade.backend.ai.rag.injector;
 
+import com.kanade.backend.ai.rag.RagReferenceCollector;
 import com.kanade.backend.ai.rag.prompt.RagPrompts;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -15,13 +16,19 @@ import java.util.stream.IntStream;
 public class TemplateContentInjector implements ContentInjector {
 
     private final String templateName;
+    private final RagReferenceCollector referenceCollector;
 
     public TemplateContentInjector() {
-        this("standard");
+        this("standard", null);
     }
 
     public TemplateContentInjector(String templateName) {
+        this(templateName, null);
+    }
+
+    public TemplateContentInjector(String templateName, RagReferenceCollector referenceCollector) {
         this.templateName = templateName;
+        this.referenceCollector = referenceCollector;
     }
 
     @Override
@@ -29,6 +36,10 @@ public class TemplateContentInjector implements ContentInjector {
         if (contents == null || contents.isEmpty()) {
             log.warn("无参考内容，返回原消息");
             return chatMessage;
+        }
+
+        if (referenceCollector != null) {
+            referenceCollector.capture(contents);
         }
 
         String formattedContents = formatContents(contents);

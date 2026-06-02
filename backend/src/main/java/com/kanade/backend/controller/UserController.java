@@ -3,7 +3,11 @@ package com.kanade.backend.controller;
 import com.kanade.backend.common.BaseResponse;
 import com.kanade.backend.common.ResultUtils;
 import com.kanade.backend.dto.user.LoginVO;
+import com.kanade.backend.dto.user.OperationLogVO;
+import com.kanade.backend.dto.user.PasswordUpdateRequest;
+import com.kanade.backend.dto.user.StorageSummaryVO;
 import com.kanade.backend.dto.user.UserLoginRequest;
+import com.kanade.backend.dto.user.UserProfileUpdateRequest;
 import com.kanade.backend.dto.user.UserQueryRequest;
 import com.kanade.backend.dto.user.UserRegisterRequest;
 import com.kanade.backend.dto.user.UserVO;
@@ -11,9 +15,12 @@ import com.kanade.backend.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * 用户管理控制器
@@ -75,6 +82,44 @@ public class UserController {
     public BaseResponse<UserVO> getCurrentUser() {
         UserVO userVO = userService.getCurrentUserVO();
         return ResultUtils.success(userVO);
+    }
+
+    /**
+     * 更新当前登录用户资料。
+     */
+    @PutMapping("/profile")
+    @Operation(summary = "更新当前用户资料", description = "更新当前登录用户的用户名、邮箱和昵称")
+    public BaseResponse<UserVO> updateProfile(@RequestBody UserProfileUpdateRequest updateRequest,
+                                              HttpServletRequest request) {
+        return ResultUtils.success(userService.updateCurrentUserProfile(updateRequest, request));
+    }
+
+    /**
+     * 修改当前登录用户密码。
+     */
+    @PutMapping("/password")
+    @Operation(summary = "修改当前用户密码", description = "校验当前密码后修改登录密码")
+    public BaseResponse<Boolean> updatePassword(@RequestBody PasswordUpdateRequest updateRequest,
+                                                HttpServletRequest request) {
+        return ResultUtils.success(userService.updateCurrentUserPassword(updateRequest, request));
+    }
+
+    /**
+     * 获取当前用户操作日志摘要。
+     */
+    @GetMapping("/logs")
+    @Operation(summary = "获取当前用户操作日志", description = "根据真实业务数据生成操作日志摘要")
+    public BaseResponse<List<OperationLogVO>> listOperationLogs(HttpServletRequest request) {
+        return ResultUtils.success(userService.listCurrentUserOperationLogs(request));
+    }
+
+    /**
+     * 获取当前用户存储摘要。
+     */
+    @GetMapping("/storage")
+    @Operation(summary = "获取当前用户存储摘要", description = "统计当前用户文档数量和存储占用")
+    public BaseResponse<StorageSummaryVO> getStorageSummary(HttpServletRequest request) {
+        return ResultUtils.success(userService.getCurrentUserStorageSummary(request));
     }
 
     /**

@@ -20,6 +20,7 @@ import org.springframework.util.DigestUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -46,9 +47,8 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
     @Override
     public Document getByMd5(Long userId, String md5) {
         QueryWrapper qw = new QueryWrapper();
-        qw.eq("user_id", userId);
-        qw.eq("file_md5", md5);
-        qw.eq("delete_flag", 0);
+        qw.where("user_id = ? AND delete_flag = 0 AND (file_md5 = ? OR file_md5 = ?)",
+                userId, md5, buildUserScopedMd5(userId, md5));
         return this.mapper.selectOneByQuery(qw);
     }
 
@@ -66,6 +66,7 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
             log.warn("⚠️ [文档上传] 文件名为空 - userId={}", userId);
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件名不能为空");
         }
+        String storedFileName = sanitizeFileName(originalName);
         
         long fileSize = file.getSize();
         log.debug("📄 [文档上传] 文件信息 - name={}, size={} bytes", originalName, fileSize);
@@ -90,6 +91,8 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
         }
 
         // 4. 提取文件扩展名和类型
+        releaseDeletedMd5(userId, md5);
+
         String fileType = getFileExtension(originalName);
         log.debug("📋 [文档上传] 文件类型: {}", fileType);
 
@@ -105,7 +108,7 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
                 .updateTime(LocalDateTime.now())
                 .deleteFlag(0)
                 .build();
-        this.save(doc);
+        saveDocumentRecord(doc, userId, md5);
         Long docId = doc.getId();
         log.info("💾 [文档上传] 文档记录已创建 - docId={}, name={}", docId, originalName);
 
@@ -115,11 +118,15 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
             log.debug("📁 [文档上传] 创建目录: {}", dir.toAbsolutePath());
             Files.createDirectories(dir);
             
-            Path filePath = dir.resolve(originalName);
+            Path filePath = dir.resolve(storedFileName).normalize();
+            Path normalizedDir = dir.toAbsolutePath().normalize();
+            if (!filePath.toAbsolutePath().normalize().startsWith(normalizedDir)) {
+                throw new IOException("非法文件名");
+            }
             log.debug("💿 [文档上传] 正在保存文件到: {}", filePath.toAbsolutePath());
             Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
             
-            String relativePath = userId + "/" + docId + "/" + originalName;
+            String relativePath = userId + "/" + docId + "/" + storedFileName;
             doc.setFilePath(relativePath);
             this.updateById(doc);
             
@@ -223,6 +230,7 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
         }
         
         doc.setDeleteFlag(1);
+        doc.setFileMd5(buildDeletedMd5(doc.getId(), doc.getFileMd5()));
         doc.setUpdateTime(LocalDateTime.now());
         boolean result = this.updateById(doc);
 
@@ -250,5 +258,77 @@ public class DocumentServiceImpl extends ServiceImpl<DocumentMapper, Document> i
             return fileName.substring(dotIndex + 1).toLowerCase();
         }
         return "";
+    }
+
+    private String sanitizeFileName(String fileName) {
+        String normalized = fileName.replace("\\", "/");
+        String baseName = normalized.substring(normalized.lastIndexOf('/') + 1)
+                .replaceAll("[\\r\\n\\t\\x00]", "")
+                .trim();
+        if (baseName.isBlank() || ".".equals(baseName) || "..".equals(baseName)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件名不合法");
+        }
+        return baseName;
+    }
+
+    private boolean isDuplicateFileMd5Exception(Throwable e) {
+        Throwable current = e;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null
+                    && message.toLowerCase().contains("duplicate")
+                    && (message.toLowerCase().contains("file_md5")
+                    || message.toLowerCase().contains("uk_user_file_md5"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void saveDocumentRecord(Document doc, Long userId, String md5) {
+        try {
+            this.save(doc);
+        } catch (RuntimeException e) {
+            if (!isDuplicateFileMd5Exception(e)) {
+                throw e;
+            }
+            if (getByMd5(userId, md5) != null) {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "该文件已上传");
+            }
+
+            // 兼容旧数据库：旧表把 file_md5 设置为全局唯一，不同用户上传同一文件会冲突。
+            // 在未执行迁移 SQL 前，改用用户范围内的稳定 MD5 键重试，避免上传流程直接 500。
+            doc.setFileMd5(buildUserScopedMd5(userId, md5));
+            try {
+                this.save(doc);
+            } catch (RuntimeException secondException) {
+                if (isDuplicateFileMd5Exception(secondException)) {
+                    throw new BusinessException(ErrorCode.PARAMS_ERROR, "文件MD5索引冲突，请执行数据库修复脚本后重试");
+                }
+                throw secondException;
+            }
+        }
+    }
+
+    private String buildUserScopedMd5(Long userId, String md5) {
+        return DigestUtils.md5DigestAsHex((userId + ":" + md5).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void releaseDeletedMd5(Long userId, String md5) {
+        String scopedMd5 = buildUserScopedMd5(userId, md5);
+        QueryWrapper qw = new QueryWrapper();
+        qw.where("user_id = ? AND delete_flag = 1 AND (file_md5 = ? OR file_md5 = ?)",
+                userId, md5, scopedMd5);
+        List<Document> deletedDocs = this.list(qw);
+        for (Document deletedDoc : deletedDocs) {
+            deletedDoc.setFileMd5(buildDeletedMd5(deletedDoc.getId(), deletedDoc.getFileMd5()));
+            deletedDoc.setUpdateTime(LocalDateTime.now());
+            this.updateById(deletedDoc);
+        }
+    }
+
+    private String buildDeletedMd5(Long documentId, String md5) {
+        return DigestUtils.md5DigestAsHex(("deleted:" + documentId + ":" + md5).getBytes(StandardCharsets.UTF_8));
     }
 }

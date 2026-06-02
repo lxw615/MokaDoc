@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.kanade.backend.ai.AiChatService;
 import com.kanade.backend.ai.AiServiceFactory;
 import com.kanade.backend.ai.rag.DocumentRagService;
+import com.kanade.backend.ai.rag.RagReferenceCollector;
 import com.kanade.backend.constant.SseMessageTypeEnum;
 import com.kanade.backend.dto.ChatSessionQueryDTO;
 import com.kanade.backend.entity.QaMessage;
@@ -13,6 +14,7 @@ import com.kanade.backend.exception.BusinessException;
 import com.kanade.backend.exception.ErrorCode;
 import com.kanade.backend.mapper.QaSessionMapper;
 import com.kanade.backend.service.QaMessageService;
+import com.kanade.backend.service.QaReferenceService;
 import com.kanade.backend.service.QaSessionService;
 import com.kanade.backend.service.SessionDocumentService;
 import com.kanade.backend.utils.GsonUtils;
@@ -55,6 +57,9 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
 
     @Resource
     private SessionDocumentService sessionDocumentService;
+
+    @Resource
+    private QaReferenceService qaReferenceService;
 
     @Override
     @Transactional
@@ -134,18 +139,24 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
 
         // 3. 根据是否有参考文档，选择不同的 AI 服务
         AiChatService aiService;
+        RagReferenceCollector referenceCollector = CollectionUtils.isEmpty(documentIds)
+                ? null
+                : new RagReferenceCollector();
         if (!CollectionUtils.isEmpty(documentIds)) {
             // 保存/更新会话-文档关联
             saveSessionDocuments(sessionId, documentIds, session.getUserId());
 
-            // 确保文档已索引到 ES（副作用：写入 ES）
-            documentRagService.getContentRetriever(sessionId, documentIds, session.getUserId());
+            // 确保文档已索引到 ES，并返回按当前用户和所选文档过滤的检索器。
+            ContentRetriever documentRetriever =
+                    documentRagService.getContentRetriever(sessionId, documentIds, session.getUserId());
 
-            aiService = aiServiceFactory.createAdvancedRagChatAssistant(session.getUserId());
+            aiService = aiServiceFactory.createAdvancedRagChatAssistant(
+                    session.getUserId(), documentRetriever, referenceCollector);
             log.info("🚀 [进阶RAG模式] sessionId={}, userId={}, documents={}", sessionId, session.getUserId(), documentIds);
         } else {
             aiService = aiServiceFactory.getChatAssistant();
         }
+        RagReferenceCollector capturedReferenceCollector = referenceCollector;
 
         // 4. 流式调用 AI 并保存响应
         StringBuilder fullResponse = new StringBuilder();
@@ -166,18 +177,31 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
                     .build();
                 qaMessageService.save(aiMsg);
 
-                // 6. 更新会话时间
+                // 6. 保存引用溯源：记录本次回答所依据的文档片段
+                if (!CollectionUtils.isEmpty(documentIds)) {
+                    qaReferenceService.saveInjectedReferences(
+                            aiMsg.getId(),
+                            documentIds,
+                            session.getUserId(),
+                            userMessage,
+                            fullResponse.toString(),
+                            capturedReferenceCollector == null
+                                    ? List.of()
+                                    : capturedReferenceCollector.getContents());
+                }
+
+                // 7. 更新会话时间
                 session.setUpdateTime(LocalDateTime.now());
                 this.updateById(session);
 
                 log.info("✅ [对话完成] sessionId={}, aiResponseLength={}", sessionId, fullResponse.length());
 
-                // 7. 发送完成标记
-                return Flux.just(buildCompleteData(sessionId));
+                // 8. 发送完成标记
+                return Flux.just(buildCompleteData(sessionId, aiMsg.getId()));
             }))
             .onErrorResume(error -> {
                 log.error("❌ [AI响应失败] sessionId={}, error={}", sessionId, error.getMessage());
-                return Flux.just(buildErrorData(sessionId, error.getMessage()));
+                return Flux.just(buildErrorData(sessionId, normalizeAiErrorMessage(error)));
             });
     }
 
@@ -272,10 +296,11 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
      * @param sessionId 会话ID
      * @return JSON字符串
      */
-    private String buildCompleteData(Long sessionId) {
+    private String buildCompleteData(Long sessionId, Long messageId) {
         Map<String, Object> data = new HashMap<>();
         data.put("type", SseMessageTypeEnum.COMPLETE.getValue());
         data.put("sessionId", sessionId);
+        data.put("messageId", messageId);
         data.put("message", "完成");
         return GsonUtils.toJson(data);
     }
@@ -291,8 +316,27 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
         Map<String, Object> data = new HashMap<>();
         data.put("type", SseMessageTypeEnum.ERROR.getValue());
         data.put("sessionId", sessionId);
-        data.put("message", "错误: " + errorMessage);
+        data.put("message", errorMessage);
         return GsonUtils.toJson(data);
+    }
+
+    private String normalizeAiErrorMessage(Throwable error) {
+        String message = error == null ? "" : String.valueOf(error.getMessage());
+        String lowerMessage = message.toLowerCase();
+        if (lowerMessage.contains("insufficient balance")) {
+            return "AI 服务余额不足，请充值当前模型 API 账号或更换可用 API Key";
+        }
+        if (lowerMessage.contains("invalid api key")
+                || lowerMessage.contains("unauthorized")
+                || lowerMessage.contains("401")) {
+            return "AI 服务认证失败，请检查 API Key 配置";
+        }
+        if (lowerMessage.contains("rate limit")
+                || lowerMessage.contains("too many requests")
+                || lowerMessage.contains("429")) {
+            return "AI 服务请求过于频繁，请稍后重试";
+        }
+        return message.isBlank() ? "AI 服务暂时不可用，请稍后重试" : message;
     }
 
     @Override
@@ -306,10 +350,12 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权删除此会话");
         }
 
-        // 逻辑删除(级联删除消息由数据库外键处理)
+        // 逻辑删除会话和消息；外键级联只会在物理删除时触发。
         session.setDeleteFlag(1);
         session.setUpdateTime(LocalDateTime.now());
         this.updateById(session);
+        qaMessageService.deleteBySessionId(sessionId);
+        documentRagService.clearCache(sessionId);
 
         log.info("删除会话成功, sessionId={}, userId={}", sessionId, userId);
     }
@@ -350,7 +396,8 @@ public class QaSessionServiceImpl extends ServiceImpl<QaSessionMapper, QaSession
         String sortOrder = chatSessionQueryDTO.getSortOrder();
         // 拼接查询条件
         queryWrapper
-                .eq("user_id", userId);
+                .eq("user_id", userId)
+                .eq("delete_flag", 0);
         // 游标查询逻辑 - 只使用 createTime 作为游标
         if (lastCreateTime != null) {
             queryWrapper.lt("create_time", lastCreateTime);

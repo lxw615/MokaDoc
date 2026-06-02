@@ -47,7 +47,8 @@ public class QaMessageServiceImpl extends ServiceImpl<QaMessageMapper, QaMessage
         // 拼接查询条件
         queryWrapper
 //                .eq("user_id", userId)
-                .eq("session_id",sessionId);
+                .eq("session_id",sessionId)
+                .eq("delete_flag", 0);
         // 游标查询逻辑 - 只使用 createTime 作为游标
         if (lastCreateTime != null) {
             queryWrapper.lt("create_time", lastCreateTime);

@@ -101,7 +101,7 @@ public class GraphEntityAligner {
             for (Map.Entry<String, GraphEntity> existing : fuzzyMap.entrySet()) {
                 String existingName = existing.getKey();
                 if (entity.getType().equals(existing.getValue().getType())
-                    && nameKey.equals(existingName)) {
+                    && isFuzzyMatch(nameKey, existingName)) {
                     // 编辑距离 ≤ 2，且同类型——合并
                     GraphEntity exist = existing.getValue();
                     exist.setSourceDocIds(mergeDocIds(exist.getSourceDocIds(), entity.getSourceDocIds()));
@@ -171,5 +171,18 @@ public class GraphEntityAligner {
             }
         }
         return dp[a.length()][b.length()];
+    }
+
+    private boolean isFuzzyMatch(String a, String b) {
+        if (a == null || b == null || a.isBlank() || b.isBlank()) {
+            return false;
+        }
+        int distance = editDistance(a, b);
+        if (distance == 0) {
+            return true;
+        }
+        int maxLength = Math.max(a.length(), b.length());
+        double similarity = 1.0 - ((double) distance / maxLength);
+        return distance <= 2 && similarity >= 0.75;
     }
 }

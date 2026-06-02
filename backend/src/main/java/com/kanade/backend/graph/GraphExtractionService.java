@@ -7,10 +7,11 @@ import com.kanade.backend.graph.model.GraphRelation;
 import dev.langchain4j.model.chat.ChatModel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.DigestUtils;
 
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * 图谱 LLM 抽取模块。
@@ -156,28 +157,13 @@ public class GraphExtractionService {
                 return ExtractionResult.failure("抽取结果无有效实体", 0);
             }
 
-            // 转换为 GraphEntity
-            List<GraphEntity> entities = llmResponse.entities.stream()
-                .map(e -> GraphEntity.builder()
-                    .entityId(e.entityId)
-                    .name(e.name)
-                    .type(e.type != null ? e.type : "Concept")
-                    .userId(userId)
-                    .sourceDocIds(e.sourceDocId != null ? e.sourceDocId : "")
-                    .build())
-                .collect(Collectors.toList());
+            Map<String, String> entityIdMap = new HashMap<>();
+            List<GraphEntity> entities = toGraphEntities(llmResponse.entities, userId, docIdMap, entityIdMap);
 
             // 转换为 GraphRelation
             List<GraphRelation> relations = new ArrayList<>();
             if (llmResponse.relations != null) {
-                relations = llmResponse.relations.stream()
-                    .map(r -> GraphRelation.builder()
-                        .fromEntityId(r.fromEntityId)
-                        .toEntityId(r.toEntityId)
-                        .type(r.type != null ? r.type : "RELATED_TO")
-                        .userId(userId)
-                        .build())
-                    .collect(Collectors.toList());
+                relations = toGraphRelations(llmResponse.relations, entityIdMap, userId, docIdMap);
             }
 
             if (entities.isEmpty()) {
@@ -195,15 +181,9 @@ public class GraphExtractionService {
                     LllmResponse llmResponse2 = gson.fromJson(repaired, type2);
                     if (llmResponse2 != null && llmResponse2.entities != null
                         && !llmResponse2.entities.isEmpty()) {
-                        List<GraphEntity> entities2 = llmResponse2.entities.stream()
-                            .map(en -> GraphEntity.builder()
-                                .entityId(en.entityId)
-                                .name(en.name)
-                                .type(en.type != null ? en.type : "Concept")
-                                .userId(userId)
-                                .sourceDocIds(en.sourceDocId != null ? en.sourceDocId : "")
-                                .build())
-                            .collect(Collectors.toList());
+                        Map<String, String> entityIdMap2 = new HashMap<>();
+                        List<GraphEntity> entities2 = toGraphEntities(
+                            llmResponse2.entities, userId, docIdMap, entityIdMap2);
                         log.info("✅ [JSON修复成功] 修复后实体={}", entities2.size());
                         return ExtractionResult.success(entities2, List.of(), 0);
                     }
@@ -316,6 +296,87 @@ public class GraphExtractionService {
             }
         }
         return lastBrace;
+    }
+
+    private List<GraphEntity> toGraphEntities(List<LllmEntity> llmEntities,
+                                              Long userId,
+                                              Map<Long, String> docIdMap,
+                                              Map<String, String> entityIdMap) {
+        if (llmEntities == null || llmEntities.isEmpty()) {
+            return List.of();
+        }
+        List<GraphEntity> entities = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (LllmEntity entity : llmEntities) {
+            if (entity == null || entity.name == null || entity.name.isBlank()) {
+                continue;
+            }
+            String type = entity.type == null || entity.type.isBlank() ? "Concept" : entity.type.trim();
+            String name = entity.name.trim();
+            String stableId = stableEntityId(userId, name, type);
+            if (entity.entityId != null && !entity.entityId.isBlank()) {
+                entityIdMap.put(entity.entityId, stableId);
+            }
+            entityIdMap.put(name, stableId);
+            if (seen.add(stableId)) {
+                entities.add(GraphEntity.builder()
+                    .entityId(stableId)
+                    .name(name)
+                    .type(type)
+                    .userId(userId)
+                    .sourceDocIds(resolveSourceDocId(entity.sourceDocId, docIdMap))
+                    .build());
+            }
+        }
+        return entities;
+    }
+
+    private List<GraphRelation> toGraphRelations(List<LllmRelation> llmRelations,
+                                                 Map<String, String> entityIdMap,
+                                                 Long userId,
+                                                 Map<Long, String> docIdMap) {
+        if (llmRelations == null || llmRelations.isEmpty()) {
+            return List.of();
+        }
+        List<GraphRelation> relations = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (LllmRelation relation : llmRelations) {
+            if (relation == null) {
+                continue;
+            }
+            String from = entityIdMap.get(relation.fromEntityId);
+            String to = entityIdMap.get(relation.toEntityId);
+            if (from == null || to == null || from.equals(to)) {
+                continue;
+            }
+            String type = relation.type == null || relation.type.isBlank() ? "RELATED_TO" : relation.type.trim();
+            String key = from + "->" + to + ":" + type;
+            if (seen.add(key)) {
+                relations.add(GraphRelation.builder()
+                    .fromEntityId(from)
+                    .toEntityId(to)
+                    .type(type)
+                    .userId(userId)
+                    .sourceDocId(resolveSourceDocId(null, docIdMap))
+                    .build());
+            }
+        }
+        return relations;
+    }
+
+    private String stableEntityId(Long userId, String name, String type) {
+        String raw = userId + ":" + type + ":" + name.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        return "kg_" + DigestUtils.md5DigestAsHex(raw.getBytes(StandardCharsets.UTF_8)).substring(0, 20);
+    }
+
+    private String resolveSourceDocId(String sourceDocId, Map<Long, String> docIdMap) {
+        if (sourceDocId != null && !sourceDocId.isBlank()) {
+            return sourceDocId.trim();
+        }
+        if (docIdMap != null && docIdMap.size() == 1) {
+            return String.valueOf(docIdMap.keySet().iterator().next());
+        }
+        return "";
     }
 
     // ==================== LLM JSON 结构映射 ====================

@@ -1,5 +1,6 @@
 package com.kanade.backend.ai.rag.orchestrator;
 
+import com.kanade.backend.ai.rag.RagReferenceCollector;
 import com.kanade.backend.ai.rag.aggregator.ReciprocalRankFusionAggregator;
 import com.kanade.backend.ai.rag.injector.GraphContentInjector;
 import com.kanade.backend.ai.rag.injector.PromptTemplateManager;
@@ -29,6 +30,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -114,13 +116,27 @@ public class AdvancedRagOrchestrator {
      * 因为 userId 在运行时才知道，所以不在 @PostConstruct 中构建。
      */
     public RetrievalAugmentor createAdvancedRagAugmentor(Long userId) {
+        return createAdvancedRagAugmentor(userId, null);
+    }
+
+    /**
+     * 为指定用户创建 RAG 增强器，可传入已按用户/文档过滤的向量检索器。
+     */
+    public RetrievalAugmentor createAdvancedRagAugmentor(Long userId, ContentRetriever scopedVectorRetriever) {
+        return createAdvancedRagAugmentor(userId, scopedVectorRetriever, null);
+    }
+
+    public RetrievalAugmentor createAdvancedRagAugmentor(Long userId,
+                                                         ContentRetriever scopedVectorRetriever,
+                                                         RagReferenceCollector referenceCollector) {
         this.currentUserId = userId;
         log.info("🚀 [RAG编排器] 为用户 {} 创建 RAG 增强器", userId);
 
+        boolean documentScoped = scopedVectorRetriever != null;
         QueryTransformer queryTransformer = buildQueryTransformer();
-        QueryRouter queryRouter = buildQueryRouter();
+        QueryRouter queryRouter = buildQueryRouter(scopedVectorRetriever);
         ContentAggregator aggregator = buildAggregator();
-        ContentInjector injector = buildInjector(userId);
+        ContentInjector injector = buildInjector(userId, documentScoped, referenceCollector);
 
         retrievalAugmentor = DefaultRetrievalAugmentor.builder()
             .queryTransformer(queryTransformer)
@@ -163,9 +179,20 @@ public class AdvancedRagOrchestrator {
      * 构建检索器映射——扩展版：增加 graph 检索器。
      */
     private Map<String, ContentRetriever> buildRetrieverMap() {
+        return buildRetrieverMap(null);
+    }
+
+    private Map<String, ContentRetriever> buildRetrieverMap(ContentRetriever scopedVectorRetriever) {
         Map<String, ContentRetriever> map = new HashMap<>();
-        map.put("vector", vectorRetriever);
-        map.put("text", textRetriever);
+        if (scopedVectorRetriever != null) {
+            map.put("vector", scopedVectorRetriever);
+            log.info("[Document RAG] Only selected-document retriever is registered: {}", map.keySet());
+            return map;
+        }
+        map.put("vector", scopedVectorRetriever != null ? scopedVectorRetriever : vectorRetriever);
+        if (scopedVectorRetriever == null) {
+            map.put("text", textRetriever);
+        }
 
         // 如果启用图谱 RAG，注册 graph 检索器
         if (graphEnabled && currentUserId != null) {
@@ -181,7 +208,15 @@ public class AdvancedRagOrchestrator {
     }
 
     private QueryRouter buildQueryRouter() {
-        Map<String, ContentRetriever> retrieverMap = buildRetrieverMap();
+        return buildQueryRouter(null);
+    }
+
+    private QueryRouter buildQueryRouter(ContentRetriever scopedVectorRetriever) {
+        Map<String, ContentRetriever> retrieverMap = buildRetrieverMap(scopedVectorRetriever);
+        if (scopedVectorRetriever != null) {
+            log.info("[Document RAG] Routing is fixed to the selected-document retriever");
+            return new DefaultQueryRouter(List.of(scopedVectorRetriever));
+        }
         if (!routingEnabled) {
             log.info("🎯 [智能路由] 已禁用，使用默认路由（全部检索器）");
             return new DefaultQueryRouter(retrieverMap.values());
@@ -204,10 +239,25 @@ public class AdvancedRagOrchestrator {
      * 构建注入器——扩展版：使用 GraphContentInjector 装饰。
      */
     private ContentInjector buildInjector(Long userId) {
+        return buildInjector(userId, false, null);
+    }
+
+    private ContentInjector buildInjector(Long userId, boolean documentScoped) {
+        return buildInjector(userId, documentScoped, null);
+    }
+
+    private ContentInjector buildInjector(Long userId,
+                                          boolean documentScoped,
+                                          RagReferenceCollector referenceCollector) {
         log.info("💉 [内容注入] 使用模板: {}", injectionTemplate);
 
         // 基础注入器
-        ContentInjector baseInjector = templateManager.createInjector(injectionTemplate);
+        ContentInjector baseInjector = templateManager.createInjector(injectionTemplate, referenceCollector);
+
+        if (documentScoped) {
+            log.info("[Document RAG] Graph context injection is skipped for selected-document QA");
+            return baseInjector;
+        }
 
         // 如果启用图谱 RAG，用 GraphContentInjector 装饰
         if (graphEnabled && userId != null) {

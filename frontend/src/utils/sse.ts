@@ -10,7 +10,8 @@ interface SSEOptions {
   signal?: AbortSignal
 }
 
-interface SSEFetchOptions extends SSEOptions {
+interface SSEFetchOptions extends Omit<SSEOptions, 'onMessage'> {
+  onMessage?: (data: string) => void
   method?: 'GET' | 'POST'
   body?: any
   headers?: Record<string, string>
@@ -93,7 +94,7 @@ export async function useSSEFetch(
   options: SSEFetchOptions = {}
 ): Promise<void> {
   const { 
-    onMessage, 
+    onMessage = () => {}, 
     onError, 
     onComplete, 
     signal,

@@ -106,9 +106,9 @@ public class GraphBatchBuilder {
         log.info("✅ [分批完成] 文档数={}, 总token={}, 批次数={}", totalDocs, totalTokens, batches.size());
         for (int i = 0; i < batches.size(); i++) {
             Batch b = batches.get(i);
-            log.info("  批次[{}]: 文档数={}, token={}/{} (填充率={:.0f}%)",
+            log.info("  批次[{}]: 文档数={}, token={}/{} (填充率={}%)",
                 i, b.docs().size(), b.totalTokens(), maxTokensPerBatch,
-                100.0 * b.totalTokens() / maxTokensPerBatch);
+                Math.round(100.0 * b.totalTokens() / maxTokensPerBatch));
         }
 
         return new BatchResult(batches, totalDocs, totalTokens);

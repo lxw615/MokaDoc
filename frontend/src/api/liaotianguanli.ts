@@ -96,3 +96,16 @@ export async function listSessions(
     ...(options || {}),
   })
 }
+
+/** 获取回答引用溯源 GET /chat/message/${messageId}/references */
+export async function listReferences(
+  params: { messageId: number },
+  options?: { [key: string]: any }
+) {
+  const { messageId, ...queryParams } = params
+  return request<{ code?: number; data?: any[]; message?: string }>(`/chat/message/${messageId}/references`, {
+    method: 'GET',
+    params: { ...queryParams },
+    ...(options || {}),
+  })
+}
